@@ -31,6 +31,7 @@ export function TournamentDetailPage() {
   const { toast } = useToast();
   const [tab, setTab] = useState('overview');
   const [registerOpen, setRegisterOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const { data: t, loading } = useAsync(() => id ? tournamentApi.get(id) : Promise.resolve(undefined), [id]);
   const { data: teams, refetch: refetchTeams } = useAsync(() => id ? tournamentApi.registeredTeams(id) : Promise.resolve([]), [id]);
@@ -47,6 +48,7 @@ export function TournamentDetailPage() {
   const handleRegister = async () => {
     if (!user) { toast('INFO', 'Please login or create an account.'); return; }
     if (!myTeam) { toast('WARNING', 'You need a team first.'); return; }
+    setBusy(true);
     try {
       await tournamentApi.registerTeam(t.id, myTeam.id, user.id);
       toast('SUCCESS', 'Team registered', myTeam.name + ' joined ' + t.name);
@@ -55,6 +57,8 @@ export function TournamentDetailPage() {
       void refetchTeams();
     } catch (e) {
       toast('ERROR', 'Registration failed', e instanceof Error ? e.message : 'Unknown');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -202,12 +206,35 @@ export function TournamentDetailPage() {
         <YouTubeEmbed url={primaryStream.youtubeUrl} title={t.name}/>
       </div>
     ) : <EmptyState icon={Trophy} title="No stream scheduled"/>)}
-  </div>;
 
-  function Info({ label, value }: { label:string; value:string }) {
-    return <div>
-      <p className="text-[10px] uppercase tracking-wider text-ink-faint">{label}</p>
-      <p className="mt-1 text-sm font-medium text-white">{value}</p>
-    </div>;
-  }
+    <Modal open={registerOpen} onClose={() => setRegisterOpen(false)} title="Register Team"
+      description={t.name + ' - ' + (teams?.length ?? 0) + '/' + t.maxTeams + ' slots'}
+      footer={<>
+        <Button variant="ghost" onClick={() => setRegisterOpen(false)}>Cancel</Button>
+        <Button onClick={handleRegister} loading={busy} disabled={!myTeam || !user}>
+          <Zap size={14}/> Confirm registration
+        </Button>
+      </>}>
+      {!user && <p className="text-sm text-ink-muted">Please login or create an account to register your team.</p>}
+      {user && !myTeam && <p className="text-sm text-ink-muted">
+        You need to be a team captain. <Link to="/team/create" className="text-brand-400 underline">Create a team</Link>.
+      </p>}
+      {user && myTeam && (
+        <div className="flex items-center gap-3 rounded-xl border border-line bg-bg-deep p-3">
+          {myTeam.logo && <img src={myTeam.logo} alt="" className="h-12 w-12 rounded-xl border border-line"/>}
+          <div>
+            <p className="font-display text-sm font-semibold uppercase text-white">{myTeam.name}</p>
+            <p className="text-xs text-ink-faint">{myTeam.tag}{myTeam.slogan ? ' - ' + myTeam.slogan : ''}</p>
+          </div>
+        </div>
+      )}
+    </Modal>
+  </div>;
+}
+
+function Info({ label, value }: { label:string; value:string }) {
+  return <div>
+    <p className="text-[10px] uppercase tracking-wider text-ink-faint">{label}</p>
+    <p className="mt-1 text-sm font-medium text-white">{value}</p>
+  </div>;
 }

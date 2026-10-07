@@ -1,4 +1,4 @@
-import type { AuditLog, LeaderboardRow, Match, MatchTeamResult, Notification, OrganizerApplication, PublicUser, Role, ScoringRule, Session, Stream, Team, TeamMember, Tournament, TournamentTeam, User } from '@/types';
+import type { AuditLog, LeaderboardRow, Match, MatchTeamResult, Notification, OrganizerApplication, PublicUser, Role, Session, Stream, Team, TeamMember, Tournament, TournamentTeam, User } from '@/types';
 import { load, reset, save, tx, uid, inviteCode as genInvite } from '@/lib/db';
 import { buildSeedDatabase } from '@/lib/seed';
 import { hashPassword, verifyPassword } from '@/lib/security';
@@ -94,7 +94,7 @@ export const teamApi = {
   async create(i: { name:string; tag:string; slogan?:string; description?:string; logo?:string; banner?:string; country?:string; city?:string; socials?:Team['socials']; captainId:string }): Promise<Team> {
     return tx(d => {
       if (d.teams.some(t => t.tag.toLowerCase() === i.tag.toLowerCase())) throw new ApiError('Tag already in use');
-      const t: Team = { id:uid('team'), inviteCode:genInvite(), requiresApproval:true, createdAt:new Date().toISOString(), ...i };
+      const t: Team = { id:uid('team'), inviteCode:genInvite(), requiresApproval:true, createdAt:new Date().toISOString(), ...i, socials: i.socials ?? {} };
       d.teams.push(t);
       d.teamMembers.push({ id:uid('tm'), teamId:t.id, userId:i.captainId, role:'CAPTAIN', status:'APPROVED', joinedAt:t.createdAt });
       const cap = d.users.find(u => u.id === i.captainId);
@@ -184,7 +184,7 @@ export const tournamentApi = {
     const rows: LeaderboardRow[] = tts.map(tt => {
       const team = d.teams.find(t => t.id === tt.teamId);
       const e = acc.get(tt.teamId) ?? { cd:0, pp:0, kp:0, bonus:0, penalty:0 };
-      return { rank:0, teamId:tt.teamId, teamName:team?.name ?? 'Unknown', teamTag:team?.tag ?? 'вЂ”',
+      return { rank:0, teamId:tt.teamId, teamName:team?.name ?? 'Unknown', teamTag:team?.tag ?? 'РІР‚вЂќ',
         teamLogo:team?.logo, cd:e.cd, pp:e.pp, kp:e.kp, tp:e.pp + e.kp + e.bonus - e.penalty };
     });
     rows.sort((a,b) => b.tp - a.tp || b.kp - a.kp || b.pp - a.pp || a.teamName.localeCompare(b.teamName));

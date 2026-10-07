@@ -1,26 +1,27 @@
-import type { Database, Match, MatchTeamResult, PubgMap, Role, ScoringRule, Stage, Team, TeamMember, Tournament, TournamentTeam, User } from '@/types';
+import type { Database } from '@/lib/db';
+import type { Match, MatchTeamResult, PubgMap, Role, ScoringRule, Stage, Team, TeamMember, Tournament, TournamentTeam, User } from '@/types';
 import { hashPassword } from './security';
 import { SYSTEM_ROLES } from './permissions';
 import { inviteCode, uid } from './db';
 
 const now = Date.now();
-const iso = (d = 0, h = 12) => new Date(now + d*86400000).toISOString().slice(0,10) + `T${String(h).padStart(2,'0')}:00:00.000Z`;
-const AV = (s: string) => `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${s}`;
+const iso = (d = 0, h = 12) => new Date(now + d*86400000).toISOString().slice(0,10) + 'T' + String(h).padStart(2,'0') + ':00:00.000Z';
+const AV = (s: string) => 'https://api.dicebear.com/7.x/bottts-neutral/svg?seed=' + s;
 
 function buildRoles(): Role[] {
   return Object.entries(SYSTEM_ROLES).map(([key, def]) => ({
-    id:`role_${key.toLowerCase()}`, key, name:def.name, description:def.description,
+    id:'role_' + key.toLowerCase(), key, name:def.name, description:def.description,
     permissions:def.permissions, system:true, createdAt:iso(-90),
   }));
 }
 
 function buildUsers(): User[] {
   const base = (u: string, n: string, r: string[], e?: string): User => ({
-    id:`user_${u}`, fullName:n, username:u, email: e ?? `${u}@example.com`,
+    id:'user_' + u, fullName:n, username:u, email: e ?? (u + '@example.com'),
     phone:'+998 90 000 00 00', passwordHash:hashPassword('ChangeMe123!'), avatar:AV(u),
     country:'Uzbekistan', city:'Tashkent', pubgNickname:u.toUpperCase(),
-    pubgId:`51${Math.floor(1000000+Math.random()*8999999)}`,
-    socials:{ telegram:`https://t.me/${u}` }, roles:r, status:'ACTIVE', createdAt:iso(-60),
+    pubgId:'51' + Math.floor(1000000 + Math.random()*8999999),
+    socials:{ telegram:'https://t.me/' + u }, roles:r, status:'ACTIVE', createdAt:iso(-60),
   });
   return [
     base('superadmin','Ranger Superadmin',['SUPERADMIN','PLAYER'],'superadmin@example.com'),
@@ -29,7 +30,7 @@ function buildUsers(): User[] {
     base('host','Match Host',['HOST','PLAYER'],'host@example.com'),
     base('captain','Alone Captain',['TEAM_CAPTAIN','PLAYER'],'captain@example.com'),
     base('player','Solo Player',['PLAYER'],'player@example.com'),
-    ...Array.from({ length:22 }, (_, i) => base(`player${i+1}`, `Demo Player ${i+1}`, ['PLAYER'])),
+    ...Array.from({ length:22 }, (_, i) => base('player' + (i+1), 'Demo Player ' + (i+1), ['PLAYER'])),
   ];
 }
 
@@ -48,13 +49,13 @@ function buildTeams(users: User[]): { teams:Team[]; members:TeamMember[] } {
   const players = users.filter(u => u.username.startsWith('player'));
   TEAM_DEFS.forEach(([name, tag, slogan], i) => {
     const captain = i === 0 ? users.find(u => u.username === 'captain')! : players[i % players.length]!;
-    const id = `team_${i+1}`;
+    const id = 'team_' + (i+1);
     teams.push({
-      id, name, tag, slogan, description:`${name} вЂ” competitive PUBG roster.`,
-      logo:AV(`${tag}-logo`), banner:`https://picsum.photos/seed/${tag}/1200/400`,
+      id, name, tag, slogan, description:name + ' - competitive PUBG roster.',
+      logo:AV(tag + '-logo'), banner:'https://picsum.photos/seed/' + tag + '/1200/400',
       country:'Uzbekistan', city:'Tashkent', captainId:captain.id,
       inviteCode:inviteCode(), requiresApproval:true,
-      socials:{ telegram:`https://t.me/${tag.toLowerCase()}` }, createdAt:iso(-45+i),
+      socials:{ telegram:'https://t.me/' + tag.toLowerCase() }, createdAt:iso(-45+i),
     });
     members.push({ id:uid('tm'), teamId:id, userId:captain.id, role:'CAPTAIN', status:'APPROVED', joinedAt:iso(-45+i) });
     for (let k = 0; k < 3; k++) {
@@ -67,7 +68,7 @@ function buildTeams(users: User[]): { teams:Team[]; members:TeamMember[] } {
 }
 
 function buildScoringRule(tid: string): ScoringRule {
-  return { id:`sr_${tid}`, tournamentId:tid, name:'PUBG Standard', killPoints:1,
+  return { id:'sr_' + tid, tournamentId:tid, name:'PUBG Standard', killPoints:1,
     placementPoints:{ 1:10, 2:6, 3:5, 4:4, 5:3, 6:2, 7:2, 8:1, 9:1, 10:1 } };
 }
 
@@ -76,11 +77,11 @@ const MAPS: PubgMap[] = ['ERANGEL','MIRAMAR','RONDO','ERANGEL'];
 function buildTournament(orgId: string, hostId: string): Tournament {
   const id = 't_ranger_scrims';
   const stages: Stage[] = [
-    { id:`${id}_s1`, tournamentId:id, name:'Qualifier', order:1,
+    { id:id + '_s1', tournamentId:id, name:'Qualifier', order:1,
       date:iso(-3,15), startTime:'15:00', endTime:'18:00',
       teamCount:32, matchCount:3, maps:['ERANGEL','MIRAMAR','RONDO'],
       qualificationRules:'Top 20 advance.', status:'FINISHED' },
-    { id:`${id}_s2`, tournamentId:id, name:'Grand Final', order:2,
+    { id:id + '_s2', tournamentId:id, name:'Grand Final', order:2,
       date:iso(0,15), startTime:'15:00', endTime:'19:00',
       teamCount:20, matchCount:4, maps:MAPS,
       qualificationRules:'Chicken dinner + placement.', status:'LIVE' },
@@ -91,9 +92,9 @@ function buildTournament(orgId: string, hostId: string): Tournament {
     description:'Flagship weekly PUBG scrim circuit. 20 invited squads, four maps, one champion.',
     rules:'1. All players must use registered PUBG ID.\n2. No teaming/hacking/emulator.\n3. Lobby credentials are confidential.\n4. Host decision final.\n5. Join lobby 10 min before start.',
     organizerId:orgId, contactInfo:'@ranger_support',
-    maps:MAPS, stages, scoringRuleId:`sr_${id}`,
-    prizePool:10_000_000,
-    prizeDistribution:[{ place:1, amount:5_000_000 },{ place:2, amount:2_500_000 },{ place:3, amount:1_500_000 },{ place:4, amount:1_000_000 }],
+    maps:MAPS, stages, scoringRuleId:'sr_' + id,
+    prizePool:10000000,
+    prizeDistribution:[{ place:1, amount:5000000 },{ place:2, amount:2500000 },{ place:3, amount:1500000 },{ place:4, amount:1000000 }],
     registrationOpen:iso(-10,9), registrationClose:iso(-1,23),
     startDate:iso(-3,15), endDate:iso(0,19),
     status:'LIVE', maxTeams:20, minTeamSize:4, timezone:'Asia/Tashkent',
@@ -104,12 +105,12 @@ function buildTournament(orgId: string, hostId: string): Tournament {
 function buildMatches(t: Tournament): Match[] {
   const st = t.stages.find(s => s.order === 2)!;
   return MAPS.map((map, i) => ({
-    id:`${t.id}_m${i+1}`, tournamentId:t.id, stageId:st.id, matchNumber:i+1, map,
+    id:t.id + '_m' + (i+1), tournamentId:t.id, stageId:st.id, matchNumber:i+1, map,
     startTime:iso(0, 15+i),
-    lobbyId: i<2 ? `RNG-${1000+i}` : undefined,
-    lobbyPassword: i<2 ? `pass${i+1}${Math.floor(Math.random()*900+100)}` : undefined,
-    hostId:t.hostIds[0], status: i<2 ? 'FINISHED' : i===2 ? 'LIVE' : 'UPCOMING',
-    resultsStatus: i<2 ? 'PUBLISHED' : 'DRAFT',
+    lobbyId: i<2 ? 'RNG-' + (1000+i) : undefined,
+    lobbyPassword: i<2 ? 'pass' + (i+1) + Math.floor(Math.random()*900+100) : undefined,
+    hostId:t.hostIds[0], status: i<2 ? 'FINISHED' as const : i===2 ? 'LIVE' as const : 'UPCOMING' as const,
+    resultsStatus: i<2 ? 'PUBLISHED' as const : 'DRAFT' as const,
   }));
 }
 
@@ -178,7 +179,7 @@ export function buildSeedDatabase(): Database {
       id:uid('ntf'), userId:u.id,
       type:([ 'INFO','SUCCESS','WARNING' ] as const)[i % 3]!,
       title:['Welcome to Ranger Esports','Your team has been registered','Match starts in 30 minutes'][i % 3]!,
-      body:'RANGER SCRIMS В· Grand Final', href:'/tournaments/t_ranger_scrims',
+      body:'RANGER SCRIMS - Grand Final', href:'/tournaments/t_ranger_scrims',
       read:i > 2, createdAt:new Date(now - i*3600000).toISOString(),
     })),
     auditLogs:[],
