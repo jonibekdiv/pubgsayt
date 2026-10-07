@@ -1,4 +1,4 @@
-import { BarChart3, Gauge, LayoutDashboard, ListOrdered, Radio, ScrollText, Settings, Shield, Swords, Trophy, User, UserCog, Users } from 'lucide-react';
+import { BarChart3, Gauge, LayoutDashboard, ListOrdered, Radio, ScrollText, Settings, Shield, Swords, Trophy, User, UserCog, Users, Wallet } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 export interface NavItem { label:string; to:string; icon:LucideIcon; permission?:string; exact?:boolean }
@@ -10,6 +10,7 @@ export const PLAYER_NAV: NavItem[] = [
   { label:'Teams', to:'/teams', icon:Users },
   { label:'Leaderboard', to:'/leaderboard', icon:ListOrdered, permission:'leaderboard.view' },
   { label:'My Team', to:'/my-team', icon:Swords },
+  { label:'Wallet', to:'/wallet', icon:Wallet },
   { label:'Profile', to:'/profile', icon:User }
 ];
 
@@ -29,6 +30,8 @@ export const ADMIN_NAV: NavItem[] = [
   { label:'Users', to:'/admin/users', icon:Users, permission:'users.view' },
   { label:'Roles', to:'/admin/roles', icon:Shield, permission:'roles.view' },
   { label:'Organizers', to:'/admin/organizers', icon:UserCog, permission:'organizer.approve' },
+  { label:'Top-ups', to:'/admin/topup-requests', icon:Wallet, permission:'users.view' },
+  { label:'Payment Settings', to:'/admin/payment-settings', icon:Settings, permission:'settings.manage' },
   { label:'Tournaments', to:'/admin/tournaments', icon:Trophy, permission:'tournaments.view' },
   { label:'Statistics', to:'/admin/statistics', icon:BarChart3, permission:'statistics.view' },
   { label:'Audit Logs', to:'/admin/audit-logs', icon:ScrollText, permission:'audit.view' },

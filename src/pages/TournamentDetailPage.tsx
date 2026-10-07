@@ -56,7 +56,15 @@ export function TournamentDetailPage() {
       void refetchLb();
       void refetchTeams();
     } catch (e) {
-      toast('ERROR', 'Registration failed', e instanceof Error ? e.message : 'Unknown');
+      const msg = e instanceof Error ? e.message : 'Unknown';
+      if (msg.startsWith('INSUFFICIENT_FUNDS:')) {
+        const needed = parseInt(msg.split(':')[1] || '0', 10);
+        toast('ERROR', 'Insufficient balance', 'Add ' + needed.toLocaleString() + ' UZS to your wallet');
+        setRegisterOpen(false);
+        setTimeout(() => { window.location.href = '/wallet/topup'; }, 900);
+        return;
+      }
+      toast('ERROR', 'Registration failed', msg);
     } finally {
       setBusy(false);
     }

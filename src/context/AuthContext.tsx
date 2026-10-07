@@ -19,6 +19,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     (async () => {
+      // self-heal: ensureDb migrates old DBs automatically
       ensureDb();
       setRoles(await roleApi.list());
       try {
