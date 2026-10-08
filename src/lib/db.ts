@@ -1,5 +1,5 @@
 import type {
-  AuditLog, Match, MatchTeamResult, Notification, OrganizerApplication, PaymentSettings,
+  AuditLog, ChatMessage, Match, MatchTeamResult, Notification, OrganizerApplication, PaymentSettings,
   Role, ScoreCorrection, ScoringRule, Stream, Team, TeamMember, TopUpRequest, Tournament,
   TournamentPlayer, TournamentTeam, User, Wallet, WalletTransaction,
 } from '@/types';

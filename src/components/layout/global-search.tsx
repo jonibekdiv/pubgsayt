@@ -1,21 +1,28 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowRight, Clock, Search, Shield, Sparkles, TrendingUp, Trophy, Users, X } from 'lucide-react';
+import {
+  ArrowRight, Clock, Command, CornerDownLeft, Hash, Search, Shield,
+  Sparkles, Trash2, TrendingUp, Trophy, Users, X,
+} from 'lucide-react';
 import { searchApi } from '@/services/api';
+import { cn, initials } from '@/lib/utils';
 import type { SearchResults } from '@/types';
 
 const EMPTY: SearchResults = { users: [], teams: [], tournaments: [] };
 const RECENT_KEY = 'ranger.recent-searches';
+const MAX_RECENT = 5;
 
 export function GlobalSearch({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [q, setQ] = useState('');
   const [res, setRes] = useState<SearchResults>(EMPTY);
   const [loading, setLoading] = useState(false);
   const [recent, setRecent] = useState<string[]>([]);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
+  /* Load recent searches */
   useEffect(() => {
     try {
       const raw = localStorage.getItem(RECENT_KEY);
@@ -23,17 +30,20 @@ export function GlobalSearch({ open, onClose }: { open: boolean; onClose: () => 
     } catch { /* ignore */ }
   }, []);
 
+  /* Focus + reset on open */
   useEffect(() => {
     if (!open) {
       setQ('');
       setRes(EMPTY);
       setLoading(false);
+      setActiveIndex(-1);
     } else {
-      const t = setTimeout(() => inputRef.current?.focus(), 150);
+      const t = setTimeout(() => inputRef.current?.focus(), 120);
       return () => clearTimeout(t);
     }
   }, [open]);
 
+  /* Lock body scroll */
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -41,15 +51,13 @@ export function GlobalSearch({ open, onClose }: { open: boolean; onClose: () => 
     return () => { document.body.style.overflow = prev; };
   }, [open]);
 
+  /* Debounced search */
   useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
-
-  useEffect(() => {
-    if (q.trim().length < 2) { setRes(EMPTY); setLoading(false); return; }
+    if (q.trim().length < 2) {
+      setRes(EMPTY);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     const t = setTimeout(async () => {
       try {
@@ -58,16 +66,50 @@ export function GlobalSearch({ open, onClose }: { open: boolean; onClose: () => 
       } finally {
         setLoading(false);
       }
-    }, 200);
+    }, 180);
     return () => clearTimeout(t);
   }, [q]);
+
+  /* Flatten results for keyboard nav */
+  const flatResults = [
+    ...res.tournaments.map(t => ({ type: 'tournament' as const, id: t.id, label: t.name, path: `/tournaments/${t.id}` })),
+    ...res.teams.map(t => ({ type: 'team' as const, id: t.id, label: t.name, path: `/teams/${t.id}` })),
+    ...res.users.map(u => ({ type: 'user' as const, id: u.id, label: u.fullName, path: '/profile' })),
+  ];
+
+  /* Keyboard navigation */
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { onClose(); return; }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActiveIndex(i => Math.min(i + 1, flatResults.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActiveIndex(i => Math.max(i - 1, -1));
+      } else if (e.key === 'Enter' && activeIndex >= 0) {
+        e.preventDefault();
+        const item = flatResults[activeIndex];
+        if (item) { saveRecent(item.label); navigate(item.path); onClose(); }
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, onClose, activeIndex, flatResults.length]);
 
   const saveRecent = (term: string) => {
     const clean = term.trim();
     if (!clean) return;
-    const next = [clean, ...recent.filter(r => r !== clean)].slice(0, 5);
+    const next = [clean, ...recent.filter(r => r !== clean)].slice(0, MAX_RECENT);
     setRecent(next);
     try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  };
+
+  const clearRecent = () => {
+    setRecent([]);
+    localStorage.removeItem(RECENT_KEY);
   };
 
   const go = (path: string, label?: string) => {
@@ -76,157 +118,166 @@ export function GlobalSearch({ open, onClose }: { open: boolean; onClose: () => 
     onClose();
   };
 
-  const hasResults = res.users.length + res.teams.length + res.tournaments.length > 0;
+  const total = res.users.length + res.teams.length + res.tournaments.length;
+  const hasResults = total > 0;
   const showRecent = !q.trim() && recent.length > 0;
-  const showTrending = !q.trim() && recent.length === 0;
+  const showSuggestions = !q.trim() && recent.length === 0;
   const showHint = q.trim().length > 0 && q.trim().length < 2;
 
   return (
     <AnimatePresence>
       {open && (
-        <div className="fixed inset-0 z-[100] flex items-stretch justify-center sm:items-center sm:p-6">
+        <div className="fixed inset-0 z-[100] flex items-start justify-center px-3 pt-[10vh] sm:p-6 sm:pt-[12vh]">
+          {/* Backdrop — simple, click to close */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            onClick={onClose}
-            className="absolute inset-0 bg-black/75 backdrop-blur-md"
+            transition={{ duration: 0.15 }}
+            onMouseDown={onClose}
+            className="absolute inset-0 bg-black/85 backdrop-blur-md"
+            aria-label="Close search"
           />
 
+          {/* Modal */}
           <motion.div
-            initial={{ opacity: 0, y: -24, scale: 0.97 }}
+            initial={{ opacity: 0, y: -20, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -16, scale: 0.98 }}
-            transition={{ type: 'spring', stiffness: 440, damping: 34 }}
-            className="relative z-10 flex h-full w-full flex-col overflow-hidden bg-bg-base sm:h-auto sm:max-h-[min(640px,85vh)] sm:max-w-2xl sm:rounded-3xl sm:border sm:border-white/[.08] sm:bg-bg-panel sm:shadow-[0_24px_80px_-12px_rgba(0,0,0,.7)]"
+            exit={{ opacity: 0, y: -12, scale: 0.98 }}
+            transition={{ type: 'spring', stiffness: 460, damping: 34 }}
+            className="relative z-10 flex w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-white/[.08] bg-bg-panel/95 shadow-[0_28px_90px_-16px_rgba(0,0,0,.8)] backdrop-blur-2xl"
             role="dialog"
             aria-modal="true"
             aria-label="Search"
           >
-            <div className="relative shrink-0 border-b border-line">
-              <div className="pointer-events-none absolute inset-x-0 -top-px h-px bg-gradient-to-r from-transparent via-brand-500/60 to-transparent" />
+            {/* Top gradient line */}
+            <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-brand-500/70 to-transparent" />
 
-              <div className="flex items-center gap-3 px-4 py-3 sm:px-5 sm:py-4">
-                <motion.span
-                  initial={{ scale: 0.85, opacity: 0 }}
+            {/* Search input */}
+            <div className="relative flex items-center gap-3 border-b border-white/[.06] px-4 py-4 sm:px-5">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-600/15 text-brand-400">
+                <Search size={16} />
+              </span>
+
+              <input
+                ref={inputRef}
+                value={q}
+                onChange={e => { setQ(e.target.value); setActiveIndex(-1); }}
+                placeholder="Search teams, tournaments, players..."
+                className="flex-1 min-w-0 bg-transparent text-base font-medium text-white placeholder:text-ink-faint/70 focus:outline-none"
+                autoComplete="off"
+                spellCheck={false}
+                enterKeyHint="search"
+              />
+
+              {q ? (
+                <motion.button
+                  initial={{ scale: 0.7, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
-                  transition={{ delay: 0.05 }}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-600/15 text-brand-400"
+                  onClick={() => { setQ(''); inputRef.current?.focus(); }}
+                  className="shrink-0 rounded-lg p-1.5 text-ink-faint transition hover:bg-white/5 hover:text-white"
+                  aria-label="Clear"
                 >
-                  <Search size={17} />
-                </motion.span>
-
-                <input
-                  ref={inputRef}
-                  value={q}
-                  onChange={e => setQ(e.target.value)}
-                  placeholder="Search teams, tournaments, users..."
-                  className="flex-1 min-w-0 bg-transparent text-base text-white placeholder:text-ink-faint focus:outline-none"
-                  autoComplete="off"
-                  spellCheck={false}
-                  enterKeyHint="search"
-                />
-
-                {q && (
-                  <motion.button
-                    initial={{ scale: 0.7, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    onClick={() => { setQ(''); inputRef.current?.focus(); }}
-                    aria-label="Clear"
-                    className="shrink-0 rounded-lg p-1.5 text-ink-faint transition hover:bg-white/[.06] hover:text-white"
-                  >
-                    <X size={15} />
-                  </motion.button>
-                )}
-
-                <button
-                  onClick={onClose}
-                  className="hidden shrink-0 rounded-xl border border-white/[.08] bg-white/[.04] px-3 py-1.5 text-xs font-semibold text-ink-muted transition hover:bg-white/[.08] hover:text-white sm:block"
-                >
-                  Close
-                </button>
-
-                <button
-                  onClick={onClose}
-                  aria-label="Close search"
-                  className="shrink-0 rounded-lg p-1.5 text-ink-faint transition hover:bg-white/[.06] hover:text-white sm:hidden"
-                >
-                  <X size={18} />
-                </button>
-              </div>
+                  <X size={15} />
+                </motion.button>
+              ) : (
+                <span className="hidden shrink-0 items-center gap-1 sm:flex">
+                  <kbd className="rounded-md border border-line bg-white/[.04] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink-faint">
+                    ESC
+                  </kbd>
+                </span>
+              )}
             </div>
 
-            <div className="no-scrollbar flex-1 overflow-y-auto overscroll-contain px-2 py-3 sm:px-3">
+            {/* Body */}
+            <div className="no-scrollbar max-h-[60vh] flex-1 overflow-y-auto overscroll-contain px-2 py-2 sm:max-h-[55vh] sm:px-3 sm:py-3">
+              {/* Recent */}
               {showRecent && (
-                <motion.div
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.05 }}
-                >
-                  <Header icon={Clock} title="Recent searches" />
+                <div>
+                  <Header
+                    icon={Clock}
+                    label="Recent searches"
+                    action={
+                      <button
+                        onClick={clearRecent}
+                        className="flex items-center gap-1 text-[10px] font-semibold text-ink-faint transition hover:text-danger"
+                      >
+                        <Trash2 size={10} /> Clear
+                      </button>
+                    }
+                  />
                   <div className="space-y-0.5">
                     {recent.map(term => (
                       <button
                         key={term}
                         onClick={() => setQ(term)}
-                        className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-white/[.05]"
+                        className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-white/[.04]"
                       >
-                        <Clock size={14} className="shrink-0 text-ink-faint" />
-                        <span className="truncate text-sm text-ink-muted">{term}</span>
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[.03] text-ink-faint transition group-hover:bg-brand-600/15 group-hover:text-brand-400">
+                          <Clock size={13} />
+                        </span>
+                        <span className="flex-1 truncate text-sm text-ink-muted group-hover:text-white">
+                          {term}
+                        </span>
+                        <ArrowRight
+                          size={13}
+                          className="shrink-0 text-ink-faint opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100"
+                        />
                       </button>
                     ))}
-                    <button
-                      onClick={() => { setRecent([]); localStorage.removeItem(RECENT_KEY); }}
-                      className="w-full rounded-lg px-3 py-2 text-left text-[11px] font-medium text-ink-faint transition hover:bg-white/[.04] hover:text-ink-muted"
-                    >
-                      Clear recent
-                    </button>
                   </div>
-                </motion.div>
-              )}
-
-              {showTrending && (
-                <motion.div
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.05 }}
-                >
-                  <Header icon={TrendingUp} title="Try searching" />
-                  <div className="space-y-0.5">
-                    {['RANGER SCRIMS', 'ALONE GAMERS', 'ALCATRAZ', 'Erangel'].map((term, i) => (
-                      <motion.button
-                        key={term}
-                        initial={{ opacity: 0, x: -6 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: 0.08 + i * 0.03 }}
-                        onClick={() => setQ(term)}
-                        className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-white/[.05]"
-                      >
-                        <Sparkles size={14} className="shrink-0 text-brand-400/70" />
-                        <span className="truncate text-sm text-ink-muted">{term}</span>
-                      </motion.button>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-
-              {showHint && (
-                <div className="flex flex-col items-center justify-center px-4 py-16 text-center">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[.04] text-ink-faint">
-                    <Search size={22} />
-                  </div>
-                  <p className="mt-4 text-sm text-ink-faint">Keep typing...</p>
                 </div>
               )}
 
-              {q.trim().length >= 2 && loading && (
-                <div className="space-y-2 p-2">
-                  {[1, 2, 3, 4].map(i => (
+              {/* Suggestions */}
+              {showSuggestions && (
+                <div>
+                  <Header icon={TrendingUp} label="Try searching" />
+                  <div className="grid gap-1.5 sm:grid-cols-2">
+                    {[
+                      { term: 'RANGER SCRIMS', icon: Trophy },
+                      { term: 'ALONE GAMERS', icon: Users },
+                      { term: 'Erangel', icon: Hash },
+                      { term: 'Live', icon: Sparkles },
+                    ].map(({ term, icon: Icon }, i) => (
+                      <motion.button
+                        key={term}
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.04 + i * 0.03 }}
+                        onClick={() => setQ(term)}
+                        className="group flex items-center gap-2.5 rounded-xl border border-line bg-bg-deep/40 px-3 py-2.5 text-left transition hover:border-brand-600/40 hover:bg-bg-deep/60"
+                      >
+                        <Icon size={13} className="shrink-0 text-brand-400" />
+                        <span className="flex-1 truncate text-sm text-ink-muted group-hover:text-white">
+                          {term}
+                        </span>
+                      </motion.button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Hint */}
+              {showHint && (
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[.04] text-ink-faint">
+                    <Search size={22} />
+                  </div>
+                  <p className="mt-4 text-sm text-ink-faint">
+                    Type at least 2 characters
+                  </p>
+                </div>
+              )}
+
+              {/* Loading */}
+              {loading && q.trim().length >= 2 && (
+                <div className="space-y-2 p-1">
+                  {[1, 2, 3].map(i => (
                     <motion.div
                       key={i}
                       initial={{ opacity: 0.3 }}
-                      animate={{ opacity: [0.3, 0.7, 0.3] }}
+                      animate={{ opacity: [0.3, 0.65, 0.3] }}
                       transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.1 }}
                       className="h-12 rounded-xl bg-white/[.04]"
                     />
@@ -234,11 +285,12 @@ export function GlobalSearch({ open, onClose }: { open: boolean; onClose: () => 
                 </div>
               )}
 
-              {q.trim().length >= 2 && !loading && !hasResults && (
+              {/* Empty */}
+              {!loading && q.trim().length >= 2 && !hasResults && (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.96 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  className="flex flex-col items-center justify-center px-4 py-16 text-center"
+                  className="flex flex-col items-center justify-center py-14 text-center"
                 >
                   <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[.04]">
                     <Search size={22} className="text-ink-faint" />
@@ -247,68 +299,91 @@ export function GlobalSearch({ open, onClose }: { open: boolean; onClose: () => 
                     No results for "{q}"
                   </p>
                   <p className="mt-1 max-w-xs text-xs text-ink-faint">
-                    Try a different team name, tournament or username.
+                    Try a different team, tournament or username.
                   </p>
                 </motion.div>
               )}
 
-              {q.trim().length >= 2 && !loading && hasResults && (
+              {/* Results */}
+              {!loading && q.trim().length >= 2 && hasResults && (
                 <div className="space-y-3">
-                  <ResultSection
-                    title="Tournaments"
-                    icon={Trophy}
-                    query={q}
-                    items={res.tournaments.map(t => ({
-                      key: t.id,
-                      label: t.name,
-                      sub: t.shortName,
-                      path: `/tournaments/${t.id}`,
-                      image: t.logo,
-                    }))}
-                    onSelect={go}
-                  />
-                  <ResultSection
-                    title="Teams"
-                    icon={Users}
-                    query={q}
-                    items={res.teams.map(t => ({
-                      key: t.id,
-                      label: t.name,
-                      sub: `[${t.tag}]`,
-                      path: `/teams/${t.id}`,
-                      image: t.logo,
-                    }))}
-                    onSelect={go}
-                  />
-                  <ResultSection
-                    title="Users"
-                    icon={Shield}
-                    query={q}
-                    items={res.users.map(u => ({
-                      key: u.id,
-                      label: u.fullName,
-                      sub: `@${u.username}`,
-                      path: '/profile',
-                      image: u.avatar,
-                    }))}
-                    onSelect={go}
-                  />
+                  {res.tournaments.length > 0 && (
+                    <Section icon={Trophy} label="Tournaments" count={res.tournaments.length}>
+                      {res.tournaments.map((t, i) => (
+                        <ResultRow
+                          key={t.id}
+                          index={i}
+                          active={activeIndex === i}
+                          onClick={() => go(`/tournaments/${t.id}`, t.name)}
+                          title={t.name}
+                          subtitle={t.shortName}
+                          badge={t.status}
+                          image={t.logo}
+                          query={q}
+                        />
+                      ))}
+                    </Section>
+                  )}
+
+                  {res.teams.length > 0 && (
+                    <Section icon={Users} label="Teams" count={res.teams.length}>
+                      {res.teams.map((t, i) => (
+                        <ResultRow
+                          key={t.id}
+                          index={res.tournaments.length + i}
+                          active={activeIndex === res.tournaments.length + i}
+                          onClick={() => go(`/teams/${t.id}`, t.name)}
+                          title={t.name}
+                          subtitle={t.tag}
+                          image={t.logo}
+                          query={q}
+                        />
+                      ))}
+                    </Section>
+                  )}
+
+                  {res.users.length > 0 && (
+                    <Section icon={Shield} label="Players" count={res.users.length}>
+                      {res.users.map((u, i) => (
+                        <ResultRow
+                          key={u.id}
+                          index={res.tournaments.length + res.teams.length + i}
+                          active={activeIndex === res.tournaments.length + res.teams.length + i}
+                          onClick={() => go('/profile', u.fullName)}
+                          title={u.fullName}
+                          subtitle={'@' + u.username}
+                          avatarSrc={u.avatar}
+                          query={q}
+                        />
+                      ))}
+                    </Section>
+                  )}
                 </div>
               )}
             </div>
 
-            <div className="hidden shrink-0 items-center justify-between border-t border-line px-4 py-2.5 sm:flex">
+            {/* Footer */}
+            <div className="flex shrink-0 items-center justify-between border-t border-white/[.06] px-4 py-2.5 sm:px-5">
               <div className="flex items-center gap-3 text-[10px] text-ink-faint">
-                <span className="flex items-center gap-1">
-                  <kbd className="rounded border border-line bg-white/[.04] px-1.5 py-0.5 font-mono text-[9px]">Esc</kbd>
-                  to close
+                <span className="hidden items-center gap-1.5 sm:flex">
+                  <KeyHint>↑</KeyHint>
+                  <KeyHint>↓</KeyHint>
+                  <span>navigate</span>
                 </span>
-                <span className="flex items-center gap-1">
-                  <kbd className="rounded border border-line bg-white/[.04] px-1.5 py-0.5 font-mono text-[9px]">Enter</kbd>
-                  to open
+                <span className="hidden items-center gap-1.5 sm:flex">
+                  <KeyHint icon={CornerDownLeft} />
+                  <span>open</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <KeyHint>esc</KeyHint>
+                  <span>close</span>
                 </span>
               </div>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-faint/60">Ranger Esports</span>
+
+              <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[.14em] text-ink-faint/60">
+                <span className="hidden sm:inline">Ranger Esports</span>
+                <Command size={10} className="sm:hidden" />
+              </div>
             </div>
           </motion.div>
         </div>
@@ -317,79 +392,146 @@ export function GlobalSearch({ open, onClose }: { open: boolean; onClose: () => 
   );
 }
 
-function Header({ icon: Icon, title }: { icon: typeof Search; title: string }) {
+/* ── Helpers ── */
+
+function Header({
+  icon: Icon,
+  label,
+  action,
+}: {
+  icon: typeof Search;
+  label: string;
+  action?: ReactNode;
+}) {
   return (
-    <div className="flex items-center gap-1.5 px-3 py-2">
-      <Icon size={11} className="text-ink-faint" />
-      <p className="text-[10px] font-semibold uppercase tracking-[.16em] text-ink-faint">{title}</p>
+    <div className="flex items-center justify-between px-3 py-2">
+      <div className="flex items-center gap-1.5">
+        <Icon size={11} className="text-ink-faint" />
+        <p className="text-[10px] font-bold uppercase tracking-[.16em] text-ink-faint">
+          {label}
+        </p>
+      </div>
+      {action}
     </div>
   );
 }
 
-interface ResultItem {
-  key: string;
-  label: string;
-  sub?: string;
-  path: string;
-  image?: string;
-}
-
-function ResultSection({
-  title, icon: Icon, items, onSelect, query,
+function Section({
+  icon: Icon,
+  label,
+  count,
+  children,
 }: {
-  title: string;
-  icon: typeof Search;
-  items: ResultItem[];
-  onSelect: (path: string, label?: string) => void;
-  query: string;
+  icon: typeof Trophy;
+  label: string;
+  count: number;
+  children: ReactNode;
 }) {
-  if (!items.length) return null;
   return (
     <div>
       <div className="flex items-center gap-1.5 px-3 py-2">
         <Icon size={11} className="text-ink-faint" />
-        <p className="text-[10px] font-semibold uppercase tracking-[.16em] text-ink-faint">{title}</p>
-        <span className="text-[10px] text-ink-faint/60">- {items.length}</span>
+        <p className="text-[10px] font-bold uppercase tracking-[.16em] text-ink-faint">
+          {label}
+        </p>
+        <span className="rounded-full bg-white/[.05] px-1.5 py-px text-[9px] font-semibold text-ink-faint">
+          {count}
+        </span>
       </div>
-      <div className="space-y-0.5">
-        {items.map((item, i) => (
-          <motion.button
-            key={item.key}
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: Math.min(i * 0.03, 0.2) }}
-            onClick={() => onSelect(item.path, item.label)}
-            className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-white/[.05]"
-          >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-bg-deep">
-              {item.image ? (
-                <img src={item.image} alt="" className="h-full w-full object-cover" loading="lazy" />
-              ) : (
-                <Icon size={14} className="text-brand-400" />
-              )}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-white">
-                <Highlight text={item.label} query={query} />
-              </p>
-              {item.sub && (
-                <p className="truncate text-[11px] text-ink-faint">
-                  <Highlight text={item.sub} query={query} />
-                </p>
-              )}
-            </div>
-            <ArrowRight
-              size={14}
-              className="shrink-0 text-ink-faint opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100"
-            />
-          </motion.button>
-        ))}
-      </div>
+      <div className="space-y-0.5">{children}</div>
     </div>
   );
 }
 
-function Highlight({ text, query }: { text: string; query: string }): ReactNode {
+function ResultRow({
+  title,
+  subtitle,
+  image,
+  avatarSrc,
+  badge,
+  onClick,
+  active,
+  index,
+  query,
+}: {
+  title: string;
+  subtitle?: string;
+  image?: string;
+  avatarSrc?: string;
+  badge?: string;
+  onClick: () => void;
+  active?: boolean;
+  index: number;
+  query: string;
+}) {
+  return (
+    <motion.button
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: Math.min(index * 0.02, 0.15) }}
+      onClick={onClick}
+      className={cn(
+        'group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition',
+        active
+          ? 'bg-brand-600/15 ring-1 ring-inset ring-brand-500/40'
+          : 'hover:bg-white/[.04]',
+      )}
+    >
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-bg-deep">
+        {avatarSrc || image ? (
+          <img
+            src={avatarSrc ?? image}
+            alt=""
+            className={cn('h-full w-full object-cover', avatarSrc && 'rounded-full')}
+          />
+        ) : (
+          <span className="font-display text-[10px] font-bold text-brand-400">
+            {initials(title)}
+          </span>
+        )}
+      </span>
+
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold text-white">
+          <Highlight text={title} query={query} />
+        </p>
+        {subtitle && (
+          <p className="truncate text-[11px] text-ink-faint">
+            <Highlight text={subtitle} query={query} />
+          </p>
+        )}
+      </div>
+
+      {badge && (
+        <span
+          className={cn(
+            'shrink-0 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider',
+            badge === 'LIVE' && 'bg-danger/15 text-danger',
+            badge === 'FINISHED' && 'bg-white/[.05] text-ink-faint',
+            badge === 'UPCOMING' && 'bg-brand-600/15 text-brand-400',
+          )}
+        >
+          {badge}
+        </span>
+      )}
+
+      <ArrowRight
+        size={13}
+        className="shrink-0 text-ink-faint opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100"
+      />
+    </motion.button>
+  );
+}
+
+function KeyHint({ children, icon: Icon }: { children?: ReactNode; icon?: typeof Command }) {
+  return (
+    <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded-md border border-line bg-white/[.04] px-1.5 font-mono text-[9px] font-bold text-ink-faint">
+      {Icon ? <Icon size={10} /> : children}
+    </kbd>
+  );
+}
+
+function Highlight({ text, query }: { text: string; query: string }) {
   const term = query.trim().toLowerCase();
   if (!term) return <>{text}</>;
   const idx = text.toLowerCase().indexOf(term);
@@ -397,7 +539,9 @@ function Highlight({ text, query }: { text: string; query: string }): ReactNode 
   return (
     <>
       {text.slice(0, idx)}
-      <mark className="rounded bg-brand-600/30 px-0.5 text-brand-400">{text.slice(idx, idx + term.length)}</mark>
+      <mark className="rounded bg-brand-600/30 px-0.5 font-semibold text-brand-300">
+        {text.slice(idx, idx + term.length)}
+      </mark>
       {text.slice(idx + term.length)}
     </>
   );

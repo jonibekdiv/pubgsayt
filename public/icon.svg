@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B1324"/>
+      <stop offset="100%" stop-color="#050914"/>
+    </linearGradient>
+
+    <radialGradient id="topGlow" cx="50%" cy="0%" r="75%">
+      <stop offset="0%" stop-color="#1473FF" stop-opacity="0.45"/>
+      <stop offset="60%" stop-color="#1473FF" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#050914" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#3D96FF"/>
+      <stop offset="100%" stop-color="#1473FF"/>
+    </linearGradient>
+
+    <filter id="textGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="20" />
+    </filter>
+  </defs>
+
+  <!-- Base -->
+  <rect width="512" height="512" rx="112" ry="112" fill="url(#bgGrad)"/>
+
+  <!-- Top brand glow -->
+  <rect width="512" height="512" rx="112" ry="112" fill="url(#topGlow)"/>
+
+  <!-- Ambient blue glow blob behind text -->
+  <ellipse cx="256" cy="256" rx="180" ry="180" fill="#1473FF" opacity="0.18" filter="url(#softGlow)"/>
+
+  <!-- Decorative ring -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#1473FF" stroke-width="3" opacity="0.22"/>
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#3D96FF" stroke-width="1" opacity="0.35"/>
+
+  <!-- Tick marks (esports radar feel) -->
+  <g stroke="#3D96FF" stroke-width="4" stroke-linecap="round" opacity="0.6">
+    <line x1="256" y1="46" x2="256" y2="70"/>
+    <line x1="256" y1="442" x2="256" y2="466"/>
+    <line x1="46" y1="256" x2="70" y2="256"/>
+    <line x1="442" y1="256" x2="466" y2="256"/>
+  </g>
+
+  <!-- Letter "R" -->
+  <text
+    x="256"
+    y="266"
+    font-family="'Chakra Petch', 'Arial Black', Arial, sans-serif"
+    font-size="270"
+    font-weight="700"
+    fill="url(#textGrad)"
+    text-anchor="middle"
+    dominant-baseline="middle"
+    filter="url(#textGlow)"
+  >R</text>
+
+  <!-- Small brand tag -->
+  <text
+    x="256"
+    y="418"
+    font-family="'JetBrains Mono', 'Courier New', monospace"
+    font-size="30"
+    font-weight="700"
+    letter-spacing="10"
+    fill="#3D96FF"
+    text-anchor="middle"
+    opacity="0.55"
+  >ESPORTS</text>
+</svg>

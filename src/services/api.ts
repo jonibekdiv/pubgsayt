@@ -1,9 +1,35 @@
 import type {
-  AuditLog, LeaderboardRow, Match, MatchTeamResult, Notification,
-  OrganizerApplication, PaymentSettings, PublicUser, Role, ScoringRule, Session, Stream, TopUpRequest,
-  Team, TeamMember, Tournament, TournamentTeam, User, Wallet, WalletTransaction,
+  AuditLog,
+  LeaderboardRow,
+  Match,
+  MatchTeamResult,
+  Notification,
+  OrganizerApplication,
+  PaymentCard,
+  PaymentSettings,
+  PublicUser,
+  Role,
+  ScoringRule,
+  Session,
+  Stream,
+  Team,
+  TeamMember,
+  TopUpRequest,
+  Tournament,
+  TournamentTeam,
+  User,
+  Wallet,
+  WalletTransaction,
 } from '@/types';
-import { load, reset, save, tx, uid, inviteCode as genInvite, CURRENT_DB_VERSION } from '@/lib/db';
+import {
+  load,
+  reset,
+  save,
+  tx,
+  uid,
+  inviteCode as genInvite,
+  CURRENT_DB_VERSION,
+} from '@/lib/db';
 import { buildSeedDatabase } from '@/lib/seed';
 import { hashPassword, verifyPassword } from '@/lib/security';
 import { aggregateLeaderboard, calculateMatchScore } from '@/lib/scoring';
@@ -16,18 +42,39 @@ import {
 } from '@/lib/wallet';
 import { realtime } from '@/lib/realtime';
 
+/* ══════════════════════════════════════════════════════════
+   DB + helpers
+   ══════════════════════════════════════════════════════════ */
+
 export function ensureDb(): void {
   const d = load();
-  if (!d) { save(buildSeedDatabase()); return; }
+  if (!d) {
+    save(buildSeedDatabase());
+    return;
+  }
   ensureWalletFields(d);
   save(d);
 }
 
-const delay = <T,>(v: T, ms = 60): Promise<T> => new Promise(r => setTimeout(() => r(v), ms));
-export class ApiError extends Error { constructor(m: string, readonly code = 400) { super(m); } }
+const delay = <T,>(v: T, ms = 60): Promise<T> =>
+  new Promise(r => setTimeout(() => r(v), ms));
 
-const strip = (u: User): PublicUser => { const { passwordHash: _p, ...rest } = u; return rest; };
-const db = () => { const d = load(); if (!d) throw new ApiError('DB unavailable', 500); return d; };
+export class ApiError extends Error {
+  constructor(m: string, readonly code = 400) {
+    super(m);
+  }
+}
+
+const strip = (u: User): PublicUser => {
+  const { passwordHash: _p, ...rest } = u;
+  return rest;
+};
+
+const db = () => {
+  const d = load();
+  if (!d) throw new ApiError('DB unavailable', 500);
+  return d;
+};
 
 function ensureWalletFields(d: ReturnType<typeof db>): void {
   if (!Array.isArray(d.wallets)) d.wallets = [];
@@ -35,12 +82,16 @@ function ensureWalletFields(d: ReturnType<typeof db>): void {
   if (!Array.isArray(d.topUpRequests)) d.topUpRequests = [];
   if (!Array.isArray(d.scoreCorrections)) d.scoreCorrections = [];
 
-  // Migration: old PaymentSettings (flat card fields) -> new (cards array)
   const ps: unknown = d.paymentSettings;
-  const isOldFormat = ps && typeof ps === 'object' && !Array.isArray((ps as PaymentSettings).cards);
+  const isOldFormat =
+    ps && typeof ps === 'object' && !Array.isArray((ps as PaymentSettings).cards);
+
   if (!ps || isOldFormat) {
     const old = ps as Partial<PaymentSettings> & {
-      cardNumber?: string; cardHolder?: string; phoneNumber?: string; bankName?: string;
+      cardNumber?: string;
+      cardHolder?: string;
+      phoneNumber?: string;
+      bankName?: string;
     };
     const firstCard = {
       id: DEFAULT_CARD.id,
@@ -63,73 +114,97 @@ function ensureWalletFields(d: ReturnType<typeof db>): void {
   if (d.paymentSettings.minTopUp === 5000) d.paymentSettings.minTopUp = 1000;
 }
 
-function audit(actorId: string, action: string, entity: string, entityId: string, oldValue?: unknown, newValue?: unknown) {
+function audit(
+  actorId: string,
+  action: string,
+  entity: string,
+  entityId: string,
+  oldValue?: unknown,
+  newValue?: unknown,
+): void {
   const d = db();
   const actor = d.users.find(u => u.id === actorId);
   d.auditLogs.unshift({
-    id: uid('audit'), actorId, actorName: actor?.fullName ?? 'System',
-    action, entity, entityId, oldValue, newValue, createdAt: new Date().toISOString(),
-  });
+    id: uid('audit'),
+    actorId,
+    actorName: actor?.fullName ?? 'System',
+    action,
+    entity,
+    entityId,
+    oldValue,
+    newValue,
+    createdAt: new Date().toISOString(),
+  } as AuditLog);
   if (d.auditLogs.length > 500) d.auditLogs.length = 500;
   save(d);
 }
 
-function notify(userId: string, type: Notification['type'], title: string, body?: string, href?: string) {
+function notify(
+  userId: string,
+  type: Notification['type'],
+  title: string,
+  body?: string,
+  href?: string,
+): void {
   const d = db();
   d.notifications.unshift({
-    id: uid('ntf'), userId, type, title, body, href, read: false,
+    id: uid('ntf'),
+    userId,
+    type,
+    title,
+    body,
+    href,
+    read: false,
     createdAt: new Date().toISOString(),
   });
   save(d);
 }
 
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў AUTH Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
-export interface CreateTournamentInput {
-  name: string;
-  shortName: string;
-  description: string;
-  rules: string;
-  organizerId: string;
-  adminLink: string;
-  banner?: string;
-  logo?: string;
-  maps: Array<'ERANGEL'|'MIRAMAR'|'RONDO'|'SANHOK'>;
-  maxTeams: number;
-  rosterRules: { minPlayers:number; maxPlayers:number; minClanTags:number; minAccountLevel:number };
-  isPaid: boolean;
-  entryFee: number;
-  prizePool: number;
-  prizeDistribution: Array<{ place:number; amount:number }>;
-  registrationOpen: string;
-  registrationClose: string;
-  startDate: string;
-  endDate: string;
-  timezone: string;
-  currentStreamUrl?: string;
-  hostIds: string[];
-  stages: Array<{
-    name: string;
-    order: number;
-    date: string;
-    startTime: string;
-    endTime?: string;
-    teamCount: number;
-    matchCount: number;
-    maps: Array<'ERANGEL'|'MIRAMAR'|'RONDO'|'SANHOK'>;
-    qualificationRules?: string;
-    qualificationCount?: number;
-  }>;
+/* Broadcast to all tabs (cross-tab) */
+function broadcastLeaderboard(tournamentId: string): void {
+  if (typeof BroadcastChannel !== 'undefined') {
+    try {
+      const bc = new BroadcastChannel('ranger-leaderboard');
+      bc.postMessage({ tournamentId });
+      bc.close();
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
+/* ══════════════════════════════════════════════════════════
+   AUTH
+   ══════════════════════════════════════════════════════════ */
+
 export const authApi = {
-  async register(i: { fullName:string; username:string; email:string; phone:string; password:string; avatar?:string }): Promise<Session> {
+  async register(i: {
+    fullName: string;
+    username: string;
+    email: string;
+    phone: string;
+    password: string;
+    avatar?: string;
+  }): Promise<Session> {
     return tx(d => {
-      if (d.users.some(u => u.username.toLowerCase() === i.username.toLowerCase())) throw new ApiError('Username already taken');
-      if (d.users.some(u => u.email.toLowerCase() === i.email.toLowerCase())) throw new ApiError('Email already registered');
+      if (d.users.some(u => u.username.toLowerCase() === i.username.toLowerCase())) {
+        throw new ApiError('Username already taken');
+      }
+      if (d.users.some(u => u.email.toLowerCase() === i.email.toLowerCase())) {
+        throw new ApiError('Email already registered');
+      }
       const u: User = {
-        id: uid('user'), fullName: i.fullName, username: i.username, email: i.email,
-        phone: i.phone, passwordHash: hashPassword(i.password), avatar: i.avatar,
-        socials: {}, roles: ['PLAYER'], status: 'ACTIVE', createdAt: new Date().toISOString(),
+        id: uid('user'),
+        fullName: i.fullName,
+        username: i.username,
+        email: i.email,
+        phone: i.phone,
+        passwordHash: hashPassword(i.password),
+        avatar: i.avatar,
+        socials: {},
+        roles: ['PLAYER'],
+        status: 'ACTIVE',
+        createdAt: new Date().toISOString(),
       };
       d.users.push(u);
       audit(u.id, 'registered', 'User', u.id);
@@ -139,11 +214,14 @@ export const authApi = {
 
   async login(identifier: string, pwd: string): Promise<Session> {
     const d = db();
-    const u = d.users.find(x =>
-      x.username.toLowerCase() === identifier.toLowerCase() ||
-      x.email.toLowerCase() === identifier.toLowerCase()
+    const u = d.users.find(
+      x =>
+        x.username.toLowerCase() === identifier.toLowerCase() ||
+        x.email.toLowerCase() === identifier.toLowerCase(),
     );
-    if (!u || !verifyPassword(pwd, u.passwordHash)) throw new ApiError('Invalid credentials', 401);
+    if (!u || !verifyPassword(pwd, u.passwordHash)) {
+      throw new ApiError('Invalid credentials', 401);
+    }
     if (u.status === 'BANNED') throw new ApiError('Account suspended', 403);
     audit(u.id, 'logged in', 'User', u.id);
     return delay({ userId: u.id, issuedAt: new Date().toISOString() });
@@ -159,14 +237,21 @@ export const authApi = {
   },
 };
 
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў USERS Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
+/* ══════════════════════════════════════════════════════════
+   USERS
+   ══════════════════════════════════════════════════════════ */
+
 export const userApi = {
   async me(id: string): Promise<PublicUser> {
     const u = db().users.find(x => x.id === id);
     if (!u) throw new ApiError('User not found', 404);
     return delay(strip(u));
   },
-  async list(): Promise<PublicUser[]> { return delay(db().users.map(strip)); },
+
+  async list(): Promise<PublicUser[]> {
+    return delay(db().users.map(strip));
+  },
+
   async update(id: string, patch: Partial<PublicUser>): Promise<PublicUser> {
     return tx(d => {
       const u = d.users.find(x => x.id === id);
@@ -175,6 +260,7 @@ export const userApi = {
       return delay(strip(u));
     });
   },
+
   async setStatus(id: string, status: User['status']): Promise<void> {
     return tx(d => {
       const u = d.users.find(x => x.id === id);
@@ -185,17 +271,29 @@ export const userApi = {
   },
 };
 
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў ROLES Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
+/* ══════════════════════════════════════════════════════════
+   ROLES
+   ══════════════════════════════════════════════════════════ */
+
 export const roleApi = {
-  async list(): Promise<Role[]> { return delay(db().roles); },
+  async list(): Promise<Role[]> {
+    return delay(db().roles);
+  },
+
   async create(i: Omit<Role, 'id' | 'createdAt' | 'system'>): Promise<Role> {
     return tx(d => {
       if (d.roles.some(r => r.key === i.key)) throw new ApiError('Role key exists');
-      const r: Role = { ...i, id: uid('role'), system: false, createdAt: new Date().toISOString() };
+      const r: Role = {
+        ...i,
+        id: uid('role'),
+        system: false,
+        createdAt: new Date().toISOString(),
+      };
       d.roles.push(r);
       return delay(r);
     });
   },
+
   async remove(id: string): Promise<void> {
     return tx(d => {
       const r = d.roles.find(x => x.id === id);
@@ -206,40 +304,76 @@ export const roleApi = {
   },
 };
 
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў TEAMS Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
+/* ══════════════════════════════════════════════════════════
+   TEAMS
+   ══════════════════════════════════════════════════════════ */
+
 export const teamApi = {
-  async list(): Promise<Team[]> { return delay(db().teams); },
-  async get(id: string) { return delay(db().teams.find(t => t.id === id)); },
-  async byInvite(code: string) { return delay(db().teams.find(t => t.inviteCode.toUpperCase() === code.toUpperCase())); },
+  async list(): Promise<Team[]> {
+    return delay(db().teams);
+  },
+
+  async get(id: string) {
+    return delay(db().teams.find(t => t.id === id));
+  },
+
+  async byInvite(code: string) {
+    return delay(
+      db().teams.find(t => t.inviteCode.toUpperCase() === code.toUpperCase()),
+    );
+  },
 
   async members(teamId: string) {
     const d = db();
-    return delay(d.teamMembers.filter(m => m.teamId === teamId)
-      .map(m => ({ ...m, user: strip(d.users.find(u => u.id === m.userId)!) }))
-      .filter(m => m.user));
+    return delay(
+      d.teamMembers
+        .filter(m => m.teamId === teamId)
+        .map(m => ({ ...m, user: strip(d.users.find(u => u.id === m.userId)!) }))
+        .filter(m => m.user),
+    );
   },
 
-  async create(i: { name:string; tag:string; slogan?:string; description?:string; logo?:string; banner?:string; country?:string; city?:string; socials?:Team['socials']; captainId:string }): Promise<Team> {
+  async create(i: {
+    name: string;
+    tag: string;
+    slogan?: string;
+    description?: string;
+    logo?: string;
+    banner?: string;
+    country?: string;
+    city?: string;
+    socials?: Team['socials'];
+    captainId: string;
+  }): Promise<Team> {
     return tx(d => {
-      // Already in a team?
-      const existing = d.teamMembers.find(m => m.userId === i.captainId && m.status === 'APPROVED');
+      const existing = d.teamMembers.find(
+        m => m.userId === i.captainId && m.status === 'APPROVED',
+      );
       if (existing) {
         const other = d.teams.find(t => t.id === existing.teamId);
-        throw new ApiError('You are already in team "' + (other?.name ?? 'Unknown') + '". Leave it first.');
+        throw new ApiError(
+          'You are already in team "' + (other?.name ?? 'Unknown') + '". Leave it first.',
+        );
       }
-
       if (d.teams.some(t => t.tag.toLowerCase() === i.tag.toLowerCase())) {
         throw new ApiError('Tag already in use');
       }
-
       const t: Team = {
-        id: uid('team'), inviteCode: genInvite(), requiresApproval: true,
-        createdAt: new Date().toISOString(), ...i, socials: i.socials ?? {},
+        id: uid('team'),
+        inviteCode: genInvite(),
+        requiresApproval: true,
+        createdAt: new Date().toISOString(),
+        ...i,
+        socials: i.socials ?? {},
       };
       d.teams.push(t);
       d.teamMembers.push({
-        id: uid('tm'), teamId: t.id, userId: i.captainId,
-        role: 'CAPTAIN', status: 'APPROVED', joinedAt: t.createdAt,
+        id: uid('tm'),
+        teamId: t.id,
+        userId: i.captainId,
+        role: 'CAPTAIN',
+        status: 'APPROVED',
+        joinedAt: t.createdAt,
       });
       const cap = d.users.find(u => u.id === i.captainId);
       if (cap && !cap.roles.includes('TEAM_CAPTAIN')) cap.roles.push('TEAM_CAPTAIN');
@@ -248,50 +382,68 @@ export const teamApi = {
     });
   },
 
-  // PATCHED_JOIN
   async join(teamId: string, userId: string, code?: string): Promise<TeamMember> {
     return tx(d => {
       const team = d.teams.find(t => t.id === teamId);
       if (!team) throw new ApiError('Team not found', 404);
-      if (code && team.inviteCode.toUpperCase() !== code.toUpperCase()) throw new ApiError('Invalid invite code', 403);
-
-      // Already member of THIS team?
-      const existing = d.teamMembers.find(m => m.teamId === teamId && m.userId === userId);
-      if (existing) {
-        if (existing.status === 'PENDING') throw new ApiError('Your join request is already pending approval');
-        if (existing.status === 'APPROVED') throw new ApiError('You are already a member of this team');
-        if (existing.status === 'REJECTED') throw new ApiError('Your previous request was rejected. Contact the captain.');
+      if (code && team.inviteCode.toUpperCase() !== code.toUpperCase()) {
+        throw new ApiError('Invalid invite code', 403);
       }
 
-      // Already member of ANOTHER team?
-      const otherTeam = d.teamMembers.find(m =>
-        m.userId === userId && m.status === 'APPROVED' && m.teamId !== teamId,
+      const existing = d.teamMembers.find(
+        m => m.teamId === teamId && m.userId === userId,
+      );
+      if (existing) {
+        if (existing.status === 'PENDING') {
+          throw new ApiError('Your join request is already pending approval');
+        }
+        if (existing.status === 'APPROVED') {
+          throw new ApiError('You are already a member of this team');
+        }
+        if (existing.status === 'REJECTED') {
+          throw new ApiError('Your previous request was rejected');
+        }
+      }
+
+      const otherTeam = d.teamMembers.find(
+        m => m.userId === userId && m.status === 'APPROVED' && m.teamId !== teamId,
       );
       if (otherTeam) {
         const other = d.teams.find(t => t.id === otherTeam.teamId);
-        throw new ApiError('You are already in team "' + (other?.name ?? 'Unknown') + '". Leave it first.');
+        throw new ApiError(
+          'You are already in team "' + (other?.name ?? 'Unknown') + '". Leave it first.',
+        );
       }
 
-      // Pending request to ANOTHER team?
-      const otherPending = d.teamMembers.find(m =>
-        m.userId === userId && m.status === 'PENDING' && m.teamId !== teamId,
+      const otherPending = d.teamMembers.find(
+        m => m.userId === userId && m.status === 'PENDING' && m.teamId !== teamId,
       );
       if (otherPending) {
         const other = d.teams.find(t => t.id === otherPending.teamId);
-        throw new ApiError('You have a pending request to "' + (other?.name ?? 'Unknown') + '"');
+        throw new ApiError(
+          'You have a pending request to "' + (other?.name ?? 'Unknown') + '"',
+        );
       }
 
       const m: TeamMember = {
-        id: uid('tm'), teamId, userId, role: 'PLAYER',
+        id: uid('tm'),
+        teamId,
+        userId,
+        role: 'PLAYER',
         status: team.requiresApproval ? 'PENDING' : 'APPROVED',
         joinedAt: new Date().toISOString(),
       };
       d.teamMembers.push(m);
 
-      notify(team.captainId, 'INFO', 'New join request',
-        (d.users.find(u => u.id === userId)?.username ?? 'A player') + ' wants to join ' + team.name,
-        '/teams/' + team.id);
-
+      notify(
+        team.captainId,
+        'INFO',
+        'New join request',
+        (d.users.find(u => u.id === userId)?.username ?? 'A player') +
+          ' wants to join ' +
+          team.name,
+        '/teams/' + team.id,
+      );
       audit(userId, 'requested to join team', 'Team', team.id);
       return delay(m);
     });
@@ -307,7 +459,9 @@ export const teamApi = {
 
   async byUser(userId: string) {
     const d = db();
-    const m = d.teamMembers.find(x => x.userId === userId && x.status === 'APPROVED');
+    const m = d.teamMembers.find(
+      x => x.userId === userId && x.status === 'APPROVED',
+    );
     return delay(m ? d.teams.find(t => t.id === m.teamId) : undefined);
   },
 
@@ -315,74 +469,211 @@ export const teamApi = {
     return tx(d => {
       const member = d.teamMembers.find(m => m.id === memberId);
       if (!member) throw new ApiError('Member not found', 404);
+
       const team = d.teams.find(t => t.id === member.teamId);
       if (!team) throw new ApiError('Team not found', 404);
-      if (team.captainId !== actorId) throw new ApiError('Only the captain can remove members', 403);
-      if (member.userId === team.captainId) throw new ApiError('Captain cannot remove themselves', 400);
+      if (team.captainId !== actorId) {
+        throw new ApiError('Only the captain can remove members', 403);
+      }
+      if (member.userId === team.captainId) {
+        throw new ApiError('Captain cannot remove themselves', 400);
+      }
+
+      const activeRegs = d.tournamentPlayers.filter(
+        tp => tp.userId === member.userId && tp.teamId === team.id,
+      );
+      if (activeRegs.length > 0) {
+        throw new ApiError(
+          'Cannot remove: player is registered in ' + activeRegs.length + ' tournament(s)',
+        );
+      }
+
       d.teamMembers = d.teamMembers.filter(m => m.id !== memberId);
-      notify(member.userId, 'WARNING', 'Removed from team', 'You were removed from ' + team.name, '/teams/' + team.id);
+      notify(
+        member.userId,
+        'WARNING',
+        'Removed from team',
+        'You were removed from ' + team.name,
+        '/teams/' + team.id,
+      );
+      audit(actorId, 'removed member from team', 'Team', team.id);
     });
   },
 
   async leaveTeam(userId: string): Promise<void> {
     return tx(d => {
-      const member = d.teamMembers.find(m => m.userId === userId && m.status === 'APPROVED');
+      const member = d.teamMembers.find(
+        m => m.userId === userId && m.status === 'APPROVED',
+      );
       if (!member) throw new ApiError('You are not in a team', 404);
+
       const team = d.teams.find(t => t.id === member.teamId);
       if (!team) throw new ApiError('Team not found', 404);
+
       if (team.captainId === userId) {
-        const others = d.teamMembers.filter(m => m.teamId === team.id && m.userId !== userId && m.status === 'APPROVED');
-        if (others.length > 0) throw new ApiError('Transfer captain role before leaving');
+        const others = d.teamMembers.filter(
+          m => m.teamId === team.id && m.userId !== userId && m.status === 'APPROVED',
+        );
+        if (others.length > 0) {
+          throw new ApiError('Transfer captain role before leaving');
+        }
         d.teamMembers = d.teamMembers.filter(m => m.teamId !== team.id);
         d.teams = d.teams.filter(t => t.id !== team.id);
+        audit(userId, 'dissolved empty team', 'Team', team.id);
         return;
       }
+
+      const activeRegs = d.tournamentPlayers.filter(
+        tp => tp.userId === userId && tp.teamId === team.id,
+      );
+      if (activeRegs.length > 0) {
+        throw new ApiError('Registered in ' + activeRegs.length + ' tournament(s)');
+      }
+
       d.teamMembers = d.teamMembers.filter(m => m.id !== member.id);
       const leaving = d.users.find(u => u.id === userId);
-      notify(team.captainId, 'INFO', 'Player left team', (leaving?.username ?? 'A player') + ' left ' + team.name, '/teams/' + team.id);
+      notify(
+        team.captainId,
+        'INFO',
+        'Player left team',
+        (leaving?.username ?? 'A player') + ' left ' + team.name,
+        '/teams/' + team.id,
+      );
+      audit(userId, 'left team', 'Team', team.id);
     });
   },
 
-  async transferCaptain(teamId: string, newCaptainUserId: string, actorId: string): Promise<void> {
+  async transferCaptain(
+    teamId: string,
+    newCaptainUserId: string,
+    actorId: string,
+  ): Promise<void> {
     return tx(d => {
       const team = d.teams.find(t => t.id === teamId);
       if (!team) throw new ApiError('Team not found', 404);
-      if (team.captainId !== actorId) throw new ApiError('Only the captain can transfer', 403);
-      const newCap = d.teamMembers.find(m => m.teamId === teamId && m.userId === newCaptainUserId && m.status === 'APPROVED');
+      if (team.captainId !== actorId) {
+        throw new ApiError('Only the captain can transfer', 403);
+      }
+
+      const newCap = d.teamMembers.find(
+        m =>
+          m.teamId === teamId &&
+          m.userId === newCaptainUserId &&
+          m.status === 'APPROVED',
+      );
       if (!newCap) throw new ApiError('New captain must be an approved member', 400);
-      const oldCap = d.teamMembers.find(m => m.teamId === teamId && m.userId === actorId);
+
+      const oldCap = d.teamMembers.find(
+        m => m.teamId === teamId && m.userId === actorId,
+      );
       if (oldCap) oldCap.role = 'PLAYER';
       newCap.role = 'CAPTAIN';
       team.captainId = newCaptainUserId;
-      notify(newCaptainUserId, 'SUCCESS', 'You are now team captain', team.name, '/teams/' + team.id);
+
+      notify(
+        newCaptainUserId,
+        'SUCCESS',
+        'You are now team captain',
+        team.name,
+        '/teams/' + team.id,
+      );
+      audit(actorId, 'transferred captaincy', 'Team', teamId);
     });
   },
 
-  async setMemberRole(memberId: string, role: TeamMember['role'], actorId: string): Promise<void> {
+  async setMemberRole(
+    memberId: string,
+    role: TeamMember['role'],
+    actorId: string,
+  ): Promise<void> {
     return tx(d => {
       const member = d.teamMembers.find(m => m.id === memberId);
       if (!member) throw new ApiError('Member not found', 404);
+
       const team = d.teams.find(t => t.id === member.teamId);
       if (!team) throw new ApiError('Team not found', 404);
-      if (team.captainId !== actorId) throw new ApiError('Only the captain can change roles', 403);
-      if (member.userId === team.captainId) throw new ApiError('Cannot change captain role', 400);
+      if (team.captainId !== actorId) {
+        throw new ApiError('Only the captain can change roles', 403);
+      }
+      if (member.userId === team.captainId) {
+        throw new ApiError('Cannot change captain role', 400);
+      }
+
       member.role = role;
+      audit(actorId, 'changed member role to ' + role, 'TeamMember', memberId);
     });
   },
-
 };
 
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў TOURNAMENTS Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
+/* ══════════════════════════════════════════════════════════
+   TOURNAMENTS
+   ══════════════════════════════════════════════════════════ */
+
+export interface CreateTournamentInput {
+  name: string;
+  shortName: string;
+  description: string;
+  rules: string;
+  organizerId: string;
+  adminLink: string;
+  banner?: string;
+  logo?: string;
+  maps: Array<'ERANGEL' | 'MIRAMAR' | 'RONDO' | 'SANHOK'>;
+  maxTeams: number;
+  rosterRules: {
+    minPlayers: number;
+    maxPlayers: number;
+    minClanTags: number;
+    minAccountLevel: number;
+  };
+  isPaid: boolean;
+  entryFee: number;
+  prizePool: number;
+  prizeDistribution: Array<{ place: number; amount: number }>;
+  registrationOpen: string;
+  registrationClose: string;
+  startDate: string;
+  endDate: string;
+  timezone: string;
+  currentStreamUrl?: string;
+  hostIds: string[];
+  stages: Array<{
+    name: string;
+    order: number;
+    date: string;
+    startTime: string;
+    endTime?: string;
+    teamCount: number;
+    matchCount: number;
+    maps: Array<'ERANGEL' | 'MIRAMAR' | 'RONDO' | 'SANHOK'>;
+    qualificationRules?: string;
+    qualificationCount?: number;
+  }>;
+}
+
 export const tournamentApi = {
-  async list(): Promise<Tournament[]> { return delay(db().tournaments); },
-  async get(id: string) { return delay(db().tournaments.find(t => t.id === id)); },
-  async create(input: CreateTournamentInput, status: Tournament['status'] = 'DRAFT'): Promise<Tournament> {
+  async list(): Promise<Tournament[]> {
+    return delay(db().tournaments);
+  },
+
+  async get(id: string) {
+    return delay(db().tournaments.find(t => t.id === id));
+  },
+
+  async create(
+    input: CreateTournamentInput,
+    status: Tournament['status'] = 'DRAFT',
+  ): Promise<Tournament> {
     return tx(d => {
-      if (d.tournaments.some(t => t.name.toLowerCase() === input.name.toLowerCase()))
+      if (d.tournaments.some(t => t.name.toLowerCase() === input.name.toLowerCase())) {
         throw new ApiError('Tournament name already exists');
+      }
 
       const id = uid('t');
-      const slug = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const slug = input.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '');
       const nowIso = new Date().toISOString();
 
       const stages = input.stages.map((s, i) => ({
@@ -403,7 +694,8 @@ export const tournamentApi = {
       }));
 
       const tournament: Tournament = {
-        id, slug,
+        id,
+        slug,
         name: input.name,
         shortName: input.shortName,
         description: input.description,
@@ -435,7 +727,13 @@ export const tournamentApi = {
         hostIds: input.hostIds,
         currentStreamUrl: input.currentStreamUrl,
         streamHistory: input.currentStreamUrl
-          ? [{ url: input.currentStreamUrl, updatedBy: input.organizerId, updatedAt: nowIso }]
+          ? [
+              {
+                url: input.currentStreamUrl,
+                updatedBy: input.organizerId,
+                updatedAt: nowIso,
+              },
+            ]
           : [],
         stageCarryMode: 'RESET_POINTS_FOR_NEXT_STAGE',
         createdAt: nowIso,
@@ -448,7 +746,7 @@ export const tournamentApi = {
         tournamentId: id,
         name: 'PUBG Default',
         killPoints: 1,
-        placementPoints: { 1:10, 2:6, 3:5, 4:4, 5:3, 6:2, 7:1, 8:1 },
+        placementPoints: { 1: 10, 2: 6, 3: 5, 4: 4, 5: 3, 6: 2, 7: 1, 8: 1 },
       });
 
       for (const stage of stages) {
@@ -470,7 +768,12 @@ export const tournamentApi = {
         }
       }
 
-      audit(input.organizerId, status === 'DRAFT' ? 'created draft tournament' : 'published tournament', 'Tournament', id);
+      audit(
+        input.organizerId,
+        status === 'DRAFT' ? 'created draft tournament' : 'published tournament',
+        'Tournament',
+        id,
+      );
       return delay(tournament);
     });
   },
@@ -481,47 +784,134 @@ export const tournamentApi = {
       if (!t) throw new ApiError('Not found', 404);
       const old = t.status;
       t.status = status;
-      audit(actorId, 'changed tournament status to ' + status, 'Tournament', tid, { status: old }, { status });
+      audit(
+        actorId,
+        'changed tournament status to ' + status,
+        'Tournament',
+        tid,
+        { status: old },
+        { status },
+      );
     });
   },
 
-
-  async registerTeam(tid: string, teamId: string, actorId: string): Promise<TournamentTeam> {
+  async registerTeam(
+    tid: string,
+    teamId: string,
+    actorId: string,
+  ): Promise<TournamentTeam> {
     return tx(d => {
       const t = d.tournaments.find(x => x.id === tid);
       if (!t) throw new ApiError('Tournament not found', 404);
-      if (!['REGISTRATION_OPEN', 'UPCOMING', 'LIVE'].includes(t.status)) throw new ApiError('Registration not open');
-      if (new Date(t.registrationClose).getTime() < Date.now()) throw new ApiError('Registration deadline passed');
+      if (!['REGISTRATION_OPEN', 'UPCOMING', 'LIVE'].includes(t.status)) {
+        throw new ApiError('Registration is not open for this tournament');
+      }
+      if (new Date(t.registrationClose).getTime() < Date.now()) {
+        throw new ApiError('Registration deadline has passed');
+      }
 
       const team = d.teams.find(x => x.id === teamId);
       if (!team) throw new ApiError('Team not found', 404);
-      if (team.captainId !== actorId) throw new ApiError('Only the team captain can register', 403);
+      if (team.captainId !== actorId) {
+        throw new ApiError('Only the team captain can register', 403);
+      }
 
-      const members = d.teamMembers.filter(m => m.teamId === teamId && m.status === 'APPROVED');
-      if (members.length < t.rosterRules.minPlayers)
-        throw new ApiError('Team needs at least ' + t.rosterRules.minPlayers + ' approved players');
+      const members = d.teamMembers.filter(
+        m => m.teamId === teamId && m.status === 'APPROVED',
+      );
+      if (members.length < t.rosterRules.minPlayers) {
+        throw new ApiError(
+          'Team needs at least ' + t.rosterRules.minPlayers + ' approved players',
+        );
+      }
 
       const clanTagCount = members.filter(m => {
         const u = d.users.find(x => x.id === m.userId);
-        return u?.pubgNickname && u.pubgNickname.toUpperCase().includes(team.tag.toUpperCase());
+        return (
+          u?.pubgNickname && u.pubgNickname.toUpperCase().includes(team.tag.toUpperCase())
+        );
       }).length;
-      if (clanTagCount < t.rosterRules.minClanTags)
-        throw new ApiError('Team needs at least ' + t.rosterRules.minClanTags + ' clan tags');
+      if (clanTagCount < t.rosterRules.minClanTags) {
+        throw new ApiError(
+          'Team needs at least ' + t.rosterRules.minClanTags + ' clan tags',
+        );
+      }
 
-      if (d.tournamentTeams.some(x => x.tournamentId === tid && x.teamId === teamId))
+      if (d.tournamentTeams.some(x => x.tournamentId === tid && x.teamId === teamId)) {
         throw new ApiError('Team is already registered');
+      }
 
-      const active = d.tournamentTeams.filter(x => x.tournamentId === tid && x.status === 'ACTIVE');
+      const active = d.tournamentTeams.filter(
+        x => x.tournamentId === tid && x.status === 'ACTIVE',
+      );
       if (active.length >= t.maxTeams) throw new ApiError('No slots available');
 
+      if (t.isPaid && t.entryFee > 0) {
+        let wallet = d.wallets.find(w => w.userId === actorId);
+        if (!wallet) {
+          wallet = {
+            userId: actorId,
+            balance: 0,
+            currency: 'UZS',
+            updatedAt: new Date().toISOString(),
+          };
+          d.wallets.push(wallet);
+        }
+        if (wallet.balance < t.entryFee) {
+          throw new ApiError('INSUFFICIENT_FUNDS:' + (t.entryFee - wallet.balance));
+        }
+      }
+
       const used = new Set(active.map(x => x.slot));
-      const slot = Array.from({ length: t.maxTeams }, (_, i) => i + 1).find(s => !used.has(s))!;
+      const slot = Array.from({ length: t.maxTeams }, (_, i) => i + 1).find(
+        s => !used.has(s),
+      )!;
 
       const tt: TournamentTeam = {
-        id: uid('tt'), tournamentId: tid, teamId, slot,
-        registeredAt: new Date().toISOString(), registeredBy: actorId, status: 'ACTIVE',
+        id: uid('tt'),
+        tournamentId: tid,
+        teamId,
+        slot,
+        registeredAt: new Date().toISOString(),
+        registeredBy: actorId,
+        status: 'ACTIVE',
       };
       d.tournamentTeams.push(tt);
+
+      if (t.isPaid && t.entryFee > 0) {
+        const wallet = d.wallets.find(w => w.userId === actorId)!;
+        wallet.balance -= t.entryFee;
+        wallet.updatedAt = new Date().toISOString();
+        d.walletTransactions.unshift({
+          id: uid('wtx'),
+          userId: actorId,
+          type: 'TOURNAMENT_ENTRY',
+          amount: -t.entryFee,
+          balanceAfter: wallet.balance,
+          description: 'Entry fee - ' + t.name,
+          refId: tt.id,
+          createdAt: new Date().toISOString(),
+        });
+        realtime.emit('wallet:update', { userId: actorId });
+      }
+
+      for (const m of members) {
+        d.tournamentPlayers.push({
+          id: uid('tp'),
+          tournamentId: tid,
+          teamId,
+          userId: m.userId,
+          role: m.role,
+          createdAt: tt.registeredAt,
+        });
+        notify(
+          m.userId,
+          'SUCCESS',
+          'You have been registered for a tournament',
+          t.name,
+          '/tournaments/' + t.id,
+        );
+      }
 
       if (active.length + 1 >= t.maxTeams) t.status = 'REGISTRATION_CLOSED';
       audit(actorId, 'registered team for tournament', 'TournamentTeam', tt.id);
@@ -554,14 +944,16 @@ export const tournamentApi = {
     const d = db();
     const t = d.tournaments.find(x => x.id === tid);
     if (!t) return delay([]);
-    return delay(aggregateLeaderboard({
-      tournamentId: tid,
-      stageId,
-      results: d.results,
-      tournamentTeams: d.tournamentTeams,
-      teams: d.teams,
-      tieBreakers: t.tieBreakers,
-    }));
+    return delay(
+      aggregateLeaderboard({
+        tournamentId: tid,
+        stageId,
+        results: d.results,
+        tournamentTeams: d.tournamentTeams,
+        teams: d.teams,
+        tieBreakers: t.tieBreakers,
+      }),
+    );
   },
 
   async scoringRule(tid: string): Promise<ScoringRule | undefined> {
@@ -574,7 +966,11 @@ export const tournamentApi = {
       if (!t) throw new ApiError('Not found', 404);
       const old = t.currentStreamUrl;
       t.currentStreamUrl = url;
-      t.streamHistory.unshift({ url, updatedBy: actorId, updatedAt: new Date().toISOString() });
+      t.streamHistory.unshift({
+        url,
+        updatedBy: actorId,
+        updatedAt: new Date().toISOString(),
+      });
       if (t.streamHistory.length > 50) t.streamHistory.length = 50;
       audit(actorId, 'updated stream URL', 'Tournament', tid, { url: old }, { url });
     });
@@ -590,24 +986,119 @@ export const tournamentApi = {
   },
 };
 
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў MATCHES Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
+/* ══════════════════════════════════════════════════════════
+   MATCHES
+   ══════════════════════════════════════════════════════════ */
+
 export const matchApi = {
   async byTournament(tid: string): Promise<Match[]> {
-    return delay(db().matches.filter(m => m.tournamentId === tid).sort((a, b) => a.matchNumber - b.matchNumber));
+    return delay(
+      db()
+        .matches.filter(m => m.tournamentId === tid)
+        .sort((a, b) => a.matchNumber - b.matchNumber),
+    );
   },
+
   async byStage(stageId: string): Promise<Match[]> {
-    return delay(db().matches.filter(m => m.stageId === stageId).sort((a, b) => a.matchNumber - b.matchNumber));
+    return delay(
+      db()
+        .matches.filter(m => m.stageId === stageId)
+        .sort((a, b) => a.matchNumber - b.matchNumber),
+    );
   },
-  async get(id: string) { return delay(db().matches.find(m => m.id === id)); },
+
+  async get(id: string) {
+    return delay(db().matches.find(m => m.id === id));
+  },
+
+  async credentialsFor(
+    matchId: string,
+    userId: string,
+  ): Promise<{
+    lobbyId?: string;
+    lobbyPassword?: string;
+    authorized: boolean;
+    reason?: string;
+  }> {
+    const d = db();
+    const match = d.matches.find(m => m.id === matchId);
+    if (!match) return { authorized: false, reason: 'Match not found' };
+
+    const actor = d.users.find(u => u.id === userId);
+    if (!actor) return { authorized: false, reason: 'Not authenticated' };
+
+    const isAdmin =
+      actor.roles.includes('ADMIN') || actor.roles.includes('SUPERADMIN');
+    const tournament = d.tournaments.find(t => t.id === match.tournamentId);
+    const isOrganizer = tournament?.organizerId === userId;
+    const isHost = tournament?.hostIds.includes(userId) || match.hostId === userId;
+
+    const myTeam = d.tournamentTeams.find(
+      tt =>
+        tt.tournamentId === match.tournamentId &&
+        tt.status === 'ACTIVE' &&
+        d.teamMembers.some(
+          tm =>
+            tm.teamId === tt.teamId &&
+            tm.userId === userId &&
+            tm.status === 'APPROVED',
+        ),
+    );
+
+    if (isAdmin || isOrganizer || isHost || myTeam) {
+      return {
+        lobbyId: match.lobbyId,
+        lobbyPassword: match.lobbyPassword,
+        authorized: true,
+      };
+    }
+
+    return {
+      authorized: false,
+      reason: 'Only registered participants can see credentials',
+    };
+  },
 
   async results(mid: string): Promise<MatchTeamResult[]> {
     return delay(db().results.filter(r => r.matchId === mid));
   },
 
+  async resultsForTeam(teamId: string) {
+    const d = db();
+    const out = d.results
+      .filter(
+        r =>
+          r.teamId === teamId &&
+          (r.status === 'PUBLISHED' || r.status === 'APPROVED'),
+      )
+      .map(r => {
+        const match = d.matches.find(m => m.id === r.matchId);
+        const tournament = match
+          ? d.tournaments.find(t => t.id === match.tournamentId)
+          : undefined;
+        const stage = match
+          ? tournament?.stages.find(s => s.id === match.stageId)
+          : undefined;
+        return { result: r, match, tournament, stage };
+      })
+      .sort((a, b) => {
+        const da = a.match?.startTime ?? '';
+        const dbb = b.match?.startTime ?? '';
+        return dbb.localeCompare(da);
+      });
+    return delay(out);
+  },
+
   async submitScores(
     matchId: string,
     actorId: string,
-    entries: Array<{ teamId: string; placement: number; kills: number; bonus: number; penalty: number }>,
+    entries: Array<{
+      teamId: string;
+      placement: number;
+      kills: number;
+      bonus: number;
+      penalty: number;
+    }>,
     mode: 'DRAFT' | 'SUBMIT' = 'SUBMIT',
   ) {
     return tx(d => {
@@ -618,23 +1109,37 @@ export const matchApi = {
 
       const placements = entries.map(e => e.placement).filter(p => p > 0);
       const dupes = placements.filter((p, i) => placements.indexOf(p) !== i);
-      if (dupes.length > 0) throw new ApiError('Duplicate placements detected: ' + [...new Set(dupes)].join(', '));
-
-      for (const e of entries) {
-        if (e.kills < 0) throw new ApiError('Kills cannot be negative');
-        if (e.placement < 0 || e.placement > 32) throw new ApiError('Invalid placement for team');
+      if (dupes.length > 0) {
+        throw new ApiError(
+          'Duplicate placements detected: ' + [...new Set(dupes)].join(', '),
+        );
       }
 
       for (const e of entries) {
+        if (e.kills < 0) throw new ApiError('Kills cannot be negative');
+        if (e.placement < 0 || e.placement > 32) throw new ApiError('Invalid placement');
+      }
+
+      const nextStatus = mode === 'DRAFT' ? 'DRAFT' : 'SUBMITTED';
+
+      for (const e of entries) {
         const score = calculateMatchScore(
-          { placement: e.placement, kills: e.kills, bonus: e.bonus, penalty: e.penalty },
+          {
+            placement: e.placement,
+            kills: e.kills,
+            bonus: e.bonus,
+            penalty: e.penalty,
+          },
           rule,
         );
-        const existing = d.results.find(r => r.matchId === matchId && r.teamId === e.teamId);
+        const existing = d.results.find(
+          r => r.matchId === matchId && r.teamId === e.teamId,
+        );
         if (existing && existing.status === 'PUBLISHED') {
-          throw new ApiError('Cannot edit published scores. Request a correction instead.');
+          throw new ApiError(
+            'Cannot edit published scores. Request a correction instead.',
+          );
         }
-        const nextStatus = mode === 'DRAFT' ? 'DRAFT' : 'SUBMITTED';
         if (existing) {
           Object.assign(existing, {
             placement: e.placement,
@@ -670,7 +1175,12 @@ export const matchApi = {
       }
 
       match.resultsStatus = mode === 'DRAFT' ? 'DRAFT' : 'SUBMITTED';
-      audit(actorId, mode === 'DRAFT' ? 'saved draft scores' : 'submitted match scores', 'Match', matchId);
+      audit(
+        actorId,
+        mode === 'DRAFT' ? 'saved draft scores' : 'submitted match scores',
+        'Match',
+        matchId,
+      );
     });
   },
 
@@ -680,17 +1190,36 @@ export const matchApi = {
       if (!match) throw new ApiError('Match not found', 404);
       const results = d.results.filter(r => r.matchId === matchId);
       if (!results.length) throw new ApiError('No scores to publish');
-      results.forEach(r => { r.status = 'PUBLISHED'; });
+
+      results.forEach(r => {
+        r.status = 'PUBLISHED';
+      });
       match.resultsStatus = 'PUBLISHED';
       match.status = 'FINISHED';
       audit(actorId, 'published match results', 'Match', matchId);
+
+      // Realtime: same tab
+      realtime.emit('leaderboard:update', {
+        tournamentId: match.tournamentId,
+      });
+
+      // Realtime: cross-tab
+      broadcastLeaderboard(match.tournamentId);
 
       const t = d.tournaments.find(x => x.id === match.tournamentId);
       if (t) {
         const teams = d.tournamentTeams.filter(tt => tt.tournamentId === t.id);
         teams.forEach(tt => {
           const team = d.teams.find(x => x.id === tt.teamId);
-          if (team) notify(team.captainId, 'INFO', 'New results published', t.name, '/tournaments/' + t.id);
+          if (team) {
+            notify(
+              team.captainId,
+              'INFO',
+              'New results published',
+              t.name,
+              '/tournaments/' + t.id,
+            );
+          }
         });
       }
     });
@@ -702,32 +1231,87 @@ export const matchApi = {
       if (!m) throw new ApiError('Not found', 404);
       const old = m.status;
       m.status = status;
-      audit(actorId, 'set match status to ' + status, 'Match', matchId, { status: old }, { status });
+      audit(
+        actorId,
+        'set match status to ' + status,
+        'Match',
+        matchId,
+        { status: old },
+        { status },
+      );
+    });
+  },
+
+  async requestCorrection(
+    resultId: string,
+    newValues: Partial<MatchTeamResult>,
+    reason: string,
+    actorId: string,
+  ) {
+    return tx(d => {
+      const r = d.results.find(x => x.id === resultId);
+      if (!r) throw new ApiError('Result not found', 404);
+      const rule = d.scoringRules.find(x => x.tournamentId === r.tournamentId)!;
+      const merged = {
+        placement: newValues.placement ?? r.placement,
+        kills: newValues.kills ?? r.kills,
+        bonus: newValues.bonus ?? r.bonus,
+        penalty: newValues.penalty ?? r.penalty,
+      };
+      const score = calculateMatchScore(merged, rule);
+      Object.assign(r, merged, {
+        placementPoints: score.placementPoints,
+        killPoints: score.killPoints,
+        totalPoints: score.totalPoints,
+      });
+      audit(actorId, 'corrected score: ' + reason, 'MatchTeamResult', resultId);
     });
   },
 };
 
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў STREAMS Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
+/* ══════════════════════════════════════════════════════════
+   STREAMS
+   ══════════════════════════════════════════════════════════ */
+
 export const streamApi = {
   async byTournament(tid: string): Promise<Stream[]> {
     return delay(db().streams.filter(s => s.tournamentId === tid));
   },
 };
 
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў ORGANIZER APPLICATIONS Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
+/* ══════════════════════════════════════════════════════════
+   ORGANIZER APPLICATIONS
+   ══════════════════════════════════════════════════════════ */
+
 export const organizerApi = {
-  async apply(i: Omit<OrganizerApplication, 'id' | 'status' | 'createdAt'>): Promise<OrganizerApplication> {
+  async apply(
+    i: Omit<OrganizerApplication, 'id' | 'status' | 'createdAt'>,
+  ): Promise<OrganizerApplication> {
     return tx(d => {
-      if (d.applications.some(a => a.userId === i.userId && a.status === 'PENDING')) throw new ApiError('Pending application exists');
+      if (d.applications.some(a => a.userId === i.userId && a.status === 'PENDING')) {
+        throw new ApiError('Pending application exists');
+      }
       const a: OrganizerApplication = {
-        ...i, id: uid('app'), status: 'PENDING', createdAt: new Date().toISOString(),
+        ...i,
+        id: uid('app'),
+        status: 'PENDING',
+        createdAt: new Date().toISOString(),
       };
       d.applications.push(a);
       return delay(a);
     });
   },
-  async list(): Promise<OrganizerApplication[]> { return delay(db().applications); },
-  async review(id: string, status: OrganizerApplication['status'], reviewerId: string, note?: string) {
+
+  async list(): Promise<OrganizerApplication[]> {
+    return delay(db().applications);
+  },
+
+  async review(
+    id: string,
+    status: OrganizerApplication['status'],
+    reviewerId: string,
+    note?: string,
+  ) {
     return tx(d => {
       const a = d.applications.find(x => x.id === id);
       if (!a) throw new ApiError('Not found', 404);
@@ -738,54 +1322,100 @@ export const organizerApi = {
       if (status === 'APPROVED') {
         const u = d.users.find(x => x.id === a.userId);
         if (u && !u.roles.includes('ORGANIZER')) u.roles.push('ORGANIZER');
-        notify(a.userId, 'SUCCESS', 'Organizer approved', 'You can now create tournaments.', '/organizer');
+        notify(
+          a.userId,
+          'SUCCESS',
+          'Organizer approved',
+          'You can create tournaments.',
+          '/organizer',
+        );
       }
       return delay(a);
     });
   },
 };
 
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў NOTIFICATIONS Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
+/* ══════════════════════════════════════════════════════════
+   NOTIFICATIONS
+   ══════════════════════════════════════════════════════════ */
+
 export const notificationApi = {
   async forUser(userId: string): Promise<Notification[]> {
-    return delay(db().notifications.filter(n => n.userId === userId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+    return delay(
+      db()
+        .notifications.filter(n => n.userId === userId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    );
   },
+
+  async markRead(id: string): Promise<void> {
+    return tx(d => {
+      const n = d.notifications.find(x => x.id === id);
+      if (n) n.read = true;
+    });
+  },
+
   async markAllRead(userId: string): Promise<void> {
-    return tx(d => { d.notifications.filter(n => n.userId === userId).forEach(n => { n.read = true; }); });
-  },
-};
-
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў AUDIT Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
-export const auditApi = {
-  async list(): Promise<AuditLog[]> { return delay(db().auditLogs); },
-};
-
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў SEARCH Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
-export const searchApi = {
-  async query(q: string): Promise<{ users:PublicUser[]; teams:Team[]; tournaments:Tournament[] }> {
-    const t = q.trim().toLowerCase();
-    if (t.length < 2) return delay({ users: [], teams: [], tournaments: [] });
-    const d = db();
-    return delay({
-      users: d.users.filter(u =>
-        u.username.toLowerCase().includes(t) || u.fullName.toLowerCase().includes(t)
-      ).slice(0, 5).map(strip),
-      teams: d.teams.filter(x =>
-        x.name.toLowerCase().includes(t) || x.tag.toLowerCase().includes(t)
-      ).slice(0, 5),
-      tournaments: d.tournaments.filter(x =>
-        x.name.toLowerCase().includes(t)
-      ).slice(0, 5),
+    return tx(d => {
+      d.notifications.filter(n => n.userId === userId).forEach(n => {
+        n.read = true;
+      });
     });
   },
 };
 
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў ADMIN Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
+/* ══════════════════════════════════════════════════════════
+   AUDIT
+   ══════════════════════════════════════════════════════════ */
+
+export const auditApi = {
+  async list(): Promise<AuditLog[]> {
+    return delay(db().auditLogs);
+  },
+};
+
+/* ══════════════════════════════════════════════════════════
+   SEARCH
+   ══════════════════════════════════════════════════════════ */
+
+export const searchApi = {
+  async query(
+    q: string,
+  ): Promise<{ users: PublicUser[]; teams: Team[]; tournaments: Tournament[] }> {
+    const t = q.trim().toLowerCase();
+    if (t.length < 2) return delay({ users: [], teams: [], tournaments: [] });
+    const d = db();
+    return delay({
+      users: d.users
+        .filter(
+          u =>
+            u.username.toLowerCase().includes(t) ||
+            u.fullName.toLowerCase().includes(t),
+        )
+        .slice(0, 5)
+        .map(strip),
+      teams: d.teams
+        .filter(
+          x =>
+            x.name.toLowerCase().includes(t) || x.tag.toLowerCase().includes(t),
+        )
+        .slice(0, 5),
+      tournaments: d.tournaments
+        .filter(x => x.name.toLowerCase().includes(t))
+        .slice(0, 5),
+    });
+  },
+};
+
+/* ══════════════════════════════════════════════════════════
+   ADMIN STATS
+   ══════════════════════════════════════════════════════════ */
+
 export const adminApi = {
   async stats() {
     const d = db();
-    ensureWalletFields(d);
-    const byStatus = (s: Tournament['status']) => d.tournaments.filter(t => t.status === s).length;
+    const byStatus = (s: Tournament['status']) =>
+      d.tournaments.filter(t => t.status === s).length;
     return delay({
       users: d.users.length,
       activeUsers: d.users.filter(u => u.status === 'ACTIVE').length,
@@ -797,29 +1427,41 @@ export const adminApi = {
       finishedTournaments: byStatus('FINISHED'),
       matches: d.matches.length,
       prizePool: d.tournaments.reduce((s, t) => s + t.prizePool, 0),
-      revenue: d.tournaments.reduce((s, t) =>
-        s + (t.isPaid ? t.entryFee * d.tournamentTeams.filter(x => x.tournamentId === t.id).length : 0), 0),
+      revenue: d.tournaments.reduce(
+        (s, t) =>
+          s +
+          (t.isPaid
+            ? t.entryFee *
+              d.tournamentTeams.filter(x => x.tournamentId === t.id).length
+            : 0),
+        0,
+      ),
       roleDistribution: d.roles
-        .map(r => ({ name: r.name, value: d.users.filter(u => u.roles.includes(r.key)).length }))
+        .map(r => ({
+          name: r.name,
+          value: d.users.filter(u => u.roles.includes(r.key)).length,
+        }))
         .filter(x => x.value > 0),
     });
   },
 };
 
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў SYSTEM Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
-export const systemApi = {
-  reset: () => { reset(); ensureDb(); },
-  seed: () => { save(buildSeedDatabase()); },
-};
+/* ══════════════════════════════════════════════════════════
+   WALLET
+   ══════════════════════════════════════════════════════════ */
 
-/* ---------- WALLET ---------- */
 export const walletApi = {
   async get(userId: string): Promise<Wallet> {
     return tx(d => {
       ensureWalletFields(d);
       let w = d.wallets.find(x => x.userId === userId);
       if (!w) {
-        w = { userId, balance: 0, currency: 'UZS', updatedAt: new Date().toISOString() };
+        w = {
+          userId,
+          balance: 0,
+          currency: 'UZS',
+          updatedAt: new Date().toISOString(),
+        };
         d.wallets.push(w);
       }
       return delay({ ...w });
@@ -829,8 +1471,8 @@ export const walletApi = {
   async transactions(userId: string, limit = 50): Promise<WalletTransaction[]> {
     ensureWalletFields(db());
     return delay(
-      db().walletTransactions
-        .filter(t => t.userId === userId)
+      db()
+        .walletTransactions.filter(t => t.userId === userId)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .slice(0, limit),
     );
@@ -840,20 +1482,39 @@ export const walletApi = {
     ensureWalletFields(db());
     const txs = db().walletTransactions.filter(t => t.userId === userId);
     const totalIn = txs.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
-    const totalOut = txs.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
-    const prizeWon = txs.filter(t => t.type === 'PRIZE_WIN').reduce((s, t) => s + t.amount, 0);
-    const pendingTopUp = db().topUpRequests
-      .filter(r => r.userId === userId && (r.status === 'PENDING_PAYMENT' || r.status === 'AWAITING_CONFIRMATION'))
+    const totalOut = txs
+      .filter(t => t.amount < 0)
+      .reduce((s, t) => s + Math.abs(t.amount), 0);
+    const prizeWon = txs
+      .filter(t => t.type === 'PRIZE_WIN')
+      .reduce((s, t) => s + t.amount, 0);
+    const pendingTopUp = db()
+      .topUpRequests.filter(
+        r =>
+          r.userId === userId &&
+          (r.status === 'PENDING_PAYMENT' ||
+            r.status === 'AWAITING_CONFIRMATION'),
+      )
       .reduce((s, r) => s + r.requestedAmount, 0);
     return delay({ totalIn, totalOut, prizeWon, pendingTopUp });
   },
 
-  async adminAdjust(userId: string, amount: number, reason: string, adminId: string) {
+  async adminAdjust(
+    userId: string,
+    amount: number,
+    reason: string,
+    adminId: string,
+  ) {
     return tx(d => {
       ensureWalletFields(d);
       let w = d.wallets.find(x => x.userId === userId);
       if (!w) {
-        w = { userId, balance: 0, currency: 'UZS', updatedAt: new Date().toISOString() };
+        w = {
+          userId,
+          balance: 0,
+          currency: 'UZS',
+          updatedAt: new Date().toISOString(),
+        };
         d.wallets.push(w);
       }
       w.balance += amount;
@@ -867,14 +1528,26 @@ export const walletApi = {
         description: reason,
         createdAt: new Date().toISOString(),
       });
-      audit(adminId, 'adjusted wallet', 'Wallet', userId, undefined, { amount, reason });
+      audit(adminId, 'adjusted wallet', 'Wallet', userId, undefined, {
+        amount,
+        reason,
+      });
+      notify(
+        userId,
+        amount > 0 ? 'SUCCESS' : 'WARNING',
+        amount > 0 ? 'Wallet credited' : 'Wallet debited',
+        (amount > 0 ? '+' : '') + amount + ' UZS - ' + reason,
+        '/wallet',
+      );
       realtime.emit('wallet:update', { userId });
-      notify(userId, amount > 0 ? 'SUCCESS' : 'WARNING', amount > 0 ? 'Wallet credited' : 'Wallet debited', (amount > 0 ? '+' : '') + amount + ' UZS - ' + reason, '/wallet');
     });
   },
 };
 
-/* ---------- TOP-UP ---------- */
+/* ══════════════════════════════════════════════════════════
+   TOP-UP
+   ══════════════════════════════════════════════════════════ */
+
 export const topUpApi = {
   async create(userId: string, requestedAmount: number): Promise<TopUpRequest> {
     return tx(d => {
@@ -888,17 +1561,25 @@ export const topUpApi = {
       }
 
       const active = d.topUpRequests.filter(
-        r => r.userId === userId && (r.status === 'PENDING_PAYMENT' || r.status === 'AWAITING_CONFIRMATION'),
+        r =>
+          r.userId === userId &&
+          (r.status === 'PENDING_PAYMENT' ||
+            r.status === 'AWAITING_CONFIRMATION'),
       );
-      if (active.length >= 3) throw new ApiError('You already have 3 active top-up requests');
+      if (active.length >= 3) {
+        throw new ApiError('You already have 3 active top-up requests');
+      }
 
       const allActive = d.topUpRequests.filter(
-        r => r.status === 'PENDING_PAYMENT' || r.status === 'AWAITING_CONFIRMATION',
+        r =>
+          r.status === 'PENDING_PAYMENT' || r.status === 'AWAITING_CONFIRMATION',
       );
       const uniqueAmount = generateUniqueAmount(requestedAmount, allActive);
 
       const primary = pickPrimaryCard(settings);
-      if (!primary) throw new ApiError('No active payment card configured. Contact admin.');
+      if (!primary) {
+        throw new ApiError('No active payment card configured. Contact admin.');
+      }
 
       const nowMs = Date.now();
       const req: TopUpRequest = {
@@ -923,12 +1604,20 @@ export const topUpApi = {
 
   async listForUser(userId: string): Promise<TopUpRequest[]> {
     ensureWalletFields(db());
-    return delay(db().topUpRequests.filter(r => r.userId === userId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+    return delay(
+      db()
+        .topUpRequests.filter(r => r.userId === userId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    );
   },
 
   async listAll(): Promise<TopUpRequest[]> {
     ensureWalletFields(db());
-    return delay([...db().topUpRequests].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+    return delay(
+      [...db().topUpRequests].sort((a, b) =>
+        b.createdAt.localeCompare(a.createdAt),
+      ),
+    );
   },
 
   async markPaid(requestId: string, userId: string) {
@@ -937,12 +1626,24 @@ export const topUpApi = {
       const r = d.topUpRequests.find(x => x.id === requestId);
       if (!r) throw new ApiError('Request not found', 404);
       if (r.userId !== userId) throw new ApiError('Not your request', 403);
-      if (r.status !== 'PENDING_PAYMENT') throw new ApiError('Request cannot be marked as paid');
+      if (r.status !== 'PENDING_PAYMENT') {
+        throw new ApiError('Request cannot be marked as paid');
+      }
       r.status = 'AWAITING_CONFIRMATION';
       r.paidAt = new Date().toISOString();
       audit(userId, 'marked top-up as paid', 'TopUpRequest', r.id);
-      d.users.filter(u => u.roles.includes('ADMIN') || u.roles.includes('SUPERADMIN')).forEach(a =>
-        notify(a.id, 'INFO', 'New top-up awaiting confirmation', r.uniqueAmount + ' UZS', '/admin/topup-requests'));
+
+      d.users
+        .filter(u => u.roles.includes('ADMIN') || u.roles.includes('SUPERADMIN'))
+        .forEach(a =>
+          notify(
+            a.id,
+            'INFO',
+            'New top-up awaiting confirmation',
+            r.uniqueAmount + ' UZS',
+            '/admin/topup-requests',
+          ),
+        );
     });
   },
 
@@ -951,11 +1652,18 @@ export const topUpApi = {
       ensureWalletFields(d);
       const r = d.topUpRequests.find(x => x.id === requestId);
       if (!r) throw new ApiError('Request not found', 404);
-      if (r.status !== 'AWAITING_CONFIRMATION') throw new ApiError('Request not awaiting confirmation');
+      if (r.status !== 'AWAITING_CONFIRMATION') {
+        throw new ApiError('Request not awaiting confirmation');
+      }
 
       let w = d.wallets.find(x => x.userId === r.userId);
       if (!w) {
-        w = { userId: r.userId, balance: 0, currency: 'UZS', updatedAt: new Date().toISOString() };
+        w = {
+          userId: r.userId,
+          balance: 0,
+          currency: 'UZS',
+          updatedAt: new Date().toISOString(),
+        };
         d.wallets.push(w);
       }
       w.balance += r.requestedAmount;
@@ -976,9 +1684,17 @@ export const topUpApi = {
       r.confirmedAt = new Date().toISOString();
       r.confirmedBy = adminId;
 
-      audit(adminId, 'approved top-up', 'TopUpRequest', r.id, undefined, { amount: r.requestedAmount });
+      audit(adminId, 'approved top-up', 'TopUpRequest', r.id, undefined, {
+        amount: r.requestedAmount,
+      });
+      notify(
+        r.userId,
+        'SUCCESS',
+        'Wallet credited',
+        '+' + r.requestedAmount + ' UZS',
+        '/wallet',
+      );
       realtime.emit('wallet:update', { userId: r.userId });
-      notify(r.userId, 'SUCCESS', 'Wallet credited', '+' + r.requestedAmount + ' UZS', '/wallet');
     });
   },
 
@@ -991,9 +1707,11 @@ export const topUpApi = {
       r.rejectedReason = reason;
       r.confirmedAt = new Date().toISOString();
       r.confirmedBy = adminId;
-      audit(adminId, 'rejected top-up', 'TopUpRequest', r.id, undefined, { reason });
-      realtime.emit('wallet:update', { userId: r.userId });
+      audit(adminId, 'rejected top-up', 'TopUpRequest', r.id, undefined, {
+        reason,
+      });
       notify(r.userId, 'ERROR', 'Top-up rejected', reason, '/wallet');
+      realtime.emit('wallet:update', { userId: r.userId });
     });
   },
 
@@ -1010,17 +1728,32 @@ export const topUpApi = {
 
   async stats() {
     const d = db();
+    ensureWalletFields(d);
     const today = new Date().toISOString().slice(0, 10);
     return delay({
-      awaiting: d.topUpRequests.filter(r => r.status === 'AWAITING_CONFIRMATION').length,
+      awaiting: d.topUpRequests.filter(r => r.status === 'AWAITING_CONFIRMATION')
+        .length,
       pending: d.topUpRequests.filter(r => r.status === 'PENDING_PAYMENT').length,
-      approvedToday: d.topUpRequests.filter(r => r.status === 'APPROVED' && r.confirmedAt && r.confirmedAt.startsWith(today)).length,
-      rejectedToday: d.topUpRequests.filter(r => r.status === 'REJECTED' && r.confirmedAt && r.confirmedAt.startsWith(today)).length,
+      approvedToday: d.topUpRequests.filter(
+        r =>
+          r.status === 'APPROVED' &&
+          r.confirmedAt &&
+          r.confirmedAt.startsWith(today),
+      ).length,
+      rejectedToday: d.topUpRequests.filter(
+        r =>
+          r.status === 'REJECTED' &&
+          r.confirmedAt &&
+          r.confirmedAt.startsWith(today),
+      ).length,
     });
   },
 };
 
-/* ---------- PAYMENT SETTINGS ---------- */
+/* ══════════════════════════════════════════════════════════
+   PAYMENT SETTINGS
+   ══════════════════════════════════════════════════════════ */
+
 export const paymentSettingsApi = {
   async get(): Promise<PaymentSettings> {
     return tx(d => {
@@ -1029,10 +1762,16 @@ export const paymentSettingsApi = {
     });
   },
 
-  async updateBounds(minTopUp: number, maxTopUp: number, adminId: string): Promise<PaymentSettings> {
+  async updateBounds(
+    minTopUp: number,
+    maxTopUp: number,
+    adminId: string,
+  ): Promise<PaymentSettings> {
     return tx(d => {
       ensureWalletFields(d);
-      if (minTopUp < 0 || maxTopUp <= minTopUp) throw new ApiError('Invalid range');
+      if (minTopUp < 0 || maxTopUp <= minTopUp) {
+        throw new ApiError('Invalid range');
+      }
       d.paymentSettings.minTopUp = minTopUp;
       d.paymentSettings.maxTopUp = maxTopUp;
       d.paymentSettings.updatedAt = new Date().toISOString();
@@ -1042,7 +1781,10 @@ export const paymentSettingsApi = {
     });
   },
 
-  async addCard(input: Omit<PaymentCard, 'id' | 'createdAt'>, adminId: string): Promise<PaymentCard> {
+  async addCard(
+    input: Omit<PaymentCard, 'id' | 'createdAt'>,
+    adminId: string,
+  ): Promise<PaymentCard> {
     return tx(d => {
       ensureWalletFields(d);
       if (!input.cardNumber.trim()) throw new ApiError('Card number required');
@@ -1059,7 +1801,11 @@ export const paymentSettingsApi = {
     });
   },
 
-  async updateCard(cardId: string, patch: Partial<PaymentCard>, adminId: string): Promise<PaymentCard> {
+  async updateCard(
+    cardId: string,
+    patch: Partial<PaymentCard>,
+    adminId: string,
+  ): Promise<PaymentCard> {
     return tx(d => {
       ensureWalletFields(d);
       const c = d.paymentSettings.cards.find(x => x.id === cardId);
@@ -1075,8 +1821,12 @@ export const paymentSettingsApi = {
   async removeCard(cardId: string, adminId: string): Promise<void> {
     return tx(d => {
       ensureWalletFields(d);
-      if (d.paymentSettings.cards.length <= 1) throw new ApiError('At least one card required');
-      d.paymentSettings.cards = d.paymentSettings.cards.filter(c => c.id !== cardId);
+      if (d.paymentSettings.cards.length <= 1) {
+        throw new ApiError('At least one card required');
+      }
+      d.paymentSettings.cards = d.paymentSettings.cards.filter(
+        c => c.id !== cardId,
+      );
       d.paymentSettings.updatedAt = new Date().toISOString();
       d.paymentSettings.updatedBy = adminId;
       audit(adminId, 'removed payment card', 'PaymentCard', cardId);
@@ -1095,3 +1845,99 @@ export const paymentSettingsApi = {
     });
   },
 };
+
+/* ══════════════════════════════════════════════════════════
+   SYSTEM
+   ══════════════════════════════════════════════════════════ */
+/* ══════════ TEAM CHAT ══════════ */
+
+export const chatApi = {
+  async forTeam(teamId: string, limit = 100): Promise<ChatMessage[]> {
+    const d = db();
+    if (!Array.isArray(d.chatMessages)) d.chatMessages = [];
+    return delay(
+      d.chatMessages
+        .filter(m => m.teamId === teamId)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .slice(-limit),
+    );
+  },
+
+  async send(teamId: string, userId: string, text: string): Promise<ChatMessage> {
+    return tx(d => {
+      if (!Array.isArray(d.chatMessages)) d.chatMessages = [];
+
+      const trimmed = text.trim();
+      if (!trimmed) throw new ApiError('Message cannot be empty');
+      if (trimmed.length > 500) throw new ApiError('Message too long (max 500 chars)');
+
+      const user = d.users.find(u => u.id === userId);
+      if (!user) throw new ApiError('User not found', 404);
+
+      const team = d.teams.find(t => t.id === teamId);
+      if (!team) throw new ApiError('Team not found', 404);
+
+      // Only team members can chat
+      const member = d.teamMembers.find(
+        m => m.teamId === teamId && m.userId === userId && m.status === 'APPROVED',
+      );
+      if (!member) throw new ApiError('Only team members can chat', 403);
+
+      const msg: ChatMessage = {
+        id: uid('msg'),
+        teamId,
+        userId,
+        userName: user.fullName,
+        userAvatar: user.avatar,
+        text: trimmed,
+        createdAt: new Date().toISOString(),
+      };
+      d.chatMessages.push(msg);
+
+      // Keep only last 500 per team
+      const teamMsgs = d.chatMessages.filter(m => m.teamId === teamId);
+      if (teamMsgs.length > 500) {
+        const toRemove = new Set(
+          teamMsgs
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+            .slice(0, teamMsgs.length - 500)
+            .map(m => m.id),
+        );
+        d.chatMessages = d.chatMessages.filter(m => !toRemove.has(m.id));
+      }
+
+      audit(userId, 'sent chat message', 'Team', teamId);
+      return delay(msg);
+    });
+  },
+
+  async deleteMessage(messageId: string, userId: string): Promise<void> {
+    return tx(d => {
+      const msg = d.chatMessages.find(m => m.id === messageId);
+      if (!msg) throw new ApiError('Message not found', 404);
+
+      const team = d.teams.find(t => t.id === msg.teamId);
+      const isCaptain = team?.captainId === userId;
+      const isAuthor = msg.userId === userId;
+      if (!isAuthor && !isCaptain) {
+        throw new ApiError('You can only delete your own messages', 403);
+      }
+
+      d.chatMessages = d.chatMessages.filter(m => m.id !== messageId);
+    });
+  },
+};
+
+
+export const systemApi = {
+  reset: () => {
+    reset();
+    ensureDb();
+  },
+  seed: () => {
+    save(buildSeedDatabase());
+  },
+};
+
+/* Re-export */
+export { CURRENT_DB_VERSION };

@@ -107,6 +107,18 @@ export interface Stream { id:string; tournamentId:string; label:string; youtubeU
 export type NotificationType = 'INFO'|'SUCCESS'|'WARNING'|'ERROR';
 export interface Notification { id:string; userId:string; type:NotificationType; title:string; body?:string; href?:string; read:boolean; createdAt:string; }
 export interface AuditLog { id:string; actorId:string; actorName:string; action:string; entity:string; entityId:string; oldValue?:unknown; newValue?:unknown; createdAt:string; }
+
+/* ---- Team Chat ---- */
+export interface ChatMessage {
+  id:string;
+  teamId:string;
+  userId:string;
+  userName:string;
+  userAvatar?:string;
+  text:string;
+  createdAt:string;
+  editedAt?:string;
+}
 export interface Session { userId:string; issuedAt:string; }
 export interface SearchResults { users:PublicUser[]; teams:Team[]; tournaments:Tournament[]; }
 

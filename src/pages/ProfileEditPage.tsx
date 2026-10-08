@@ -13,6 +13,7 @@ import { RequireAuth } from '@/components/common/require-auth';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { userApi } from '@/services/api';
+import { compressImage, PRESETS, formatBytes } from '@/lib/image-utils';
 import { cn } from '@/lib/utils';
 
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024; // 2MB
@@ -68,27 +69,32 @@ function Inner() {
   const setSocial = (key: SocialKey, value: string) =>
     setForm(prev => ({ ...prev, socials: { ...prev.socials, [key]: value } }));
 
-  const handleFile = async (file: File) => {
+   const handleFile = async (file: File) => {
     if (!ALLOWED.includes(file.type)) {
       toast('ERROR', 'Invalid file type', 'Only PNG, JPG, WEBP, GIF allowed');
       return;
     }
     if (file.size > MAX_AVATAR_BYTES) {
-      toast('ERROR', 'File too large', 'Maximum 2 MB');
+      toast('ERROR', 'File too large', 'Maximum ' + formatBytes(MAX_AVATAR_BYTES));
       return;
     }
     setUploading(true);
     try {
-      const dataUrl = await readAsDataURL(file);
-      set('avatar', dataUrl);
-      toast('SUCCESS', 'Photo selected', 'Click Save to apply changes');
-    } catch {
-      toast('ERROR', 'Failed to read image');
+      const result = await compressImage(file, PRESETS.avatar);
+      set('avatar', result.dataUrl);
+      const saved = ((1 - result.ratio) * 100).toFixed(0);
+      toast(
+        'SUCCESS',
+        'Photo ready',
+        formatBytes(result.originalBytes) + ' → ' + formatBytes(result.compressedBytes) +
+        ' (-' + saved + '%)',
+      );
+    } catch (e) {
+      toast('ERROR', 'Failed to process image', e instanceof Error ? e.message : 'Unknown');
     } finally {
       setUploading(false);
     }
   };
-
   const handleRemove = () => {
     set('avatar', '');
     if (fileRef.current) fileRef.current.value = '';
