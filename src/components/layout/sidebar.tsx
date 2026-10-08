@@ -4,9 +4,11 @@ import { Zap } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { ADMIN_NAV, HOST_NAV, ORGANIZER_NAV, PLAYER_NAV, type NavItem } from './nav-config';
 import { cn } from '@/lib/utils';
+import { usePendingCount } from './my-team-badge';
 
 export function Sidebar() {
   const { user, can } = useAuth();
+  const pendingCount = usePendingCount();
   const groups: { title:string; items:NavItem[] }[] = [
     { title:'Play', items:PLAYER_NAV },
     ...(user && can('hosts.manage') ? [{ title:'Organizer', items:ORGANIZER_NAV }] : []),
@@ -43,7 +45,14 @@ export function Sidebar() {
                       {isActive && <motion.span layoutId="sidebar-active" transition={{ type:'spring', stiffness:480, damping:38 }}
                         className="absolute inset-0 rounded-xl bg-brand-600/18 ring-1 ring-inset ring-brand-500/35"/>}
                       <i.icon size={17} className="relative shrink-0"/>
-                      <span className="relative">{i.label}</span>
+                      <span className="relative flex items-center gap-1.5">
+                        {i.label}
+                        {i.to === '/my-team' && pendingCount > 0 && (
+                          <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-warning px-1 text-[9px] font-bold text-black">
+                            {pendingCount > 9 ? '9+' : pendingCount}
+                          </span>
+                        )}
+                      </span>
                     </>
                   )}
                 </NavLink>

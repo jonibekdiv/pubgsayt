@@ -83,7 +83,7 @@ function notify(userId: string, type: Notification['type'], title: string, body?
   save(d);
 }
 
-/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў AUTH Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
+/* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў AUTH Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */
 export interface CreateTournamentInput {
   name: string;
   shortName: string;
@@ -221,7 +221,17 @@ export const teamApi = {
 
   async create(i: { name:string; tag:string; slogan?:string; description?:string; logo?:string; banner?:string; country?:string; city?:string; socials?:Team['socials']; captainId:string }): Promise<Team> {
     return tx(d => {
-      if (d.teams.some(t => t.tag.toLowerCase() === i.tag.toLowerCase())) throw new ApiError('Tag already in use');
+      // Already in a team?
+      const existing = d.teamMembers.find(m => m.userId === i.captainId && m.status === 'APPROVED');
+      if (existing) {
+        const other = d.teams.find(t => t.id === existing.teamId);
+        throw new ApiError('You are already in team "' + (other?.name ?? 'Unknown') + '". Leave it first.');
+      }
+
+      if (d.teams.some(t => t.tag.toLowerCase() === i.tag.toLowerCase())) {
+        throw new ApiError('Tag already in use');
+      }
+
       const t: Team = {
         id: uid('team'), inviteCode: genInvite(), requiresApproval: true,
         createdAt: new Date().toISOString(), ...i, socials: i.socials ?? {},
@@ -238,18 +248,51 @@ export const teamApi = {
     });
   },
 
+  // PATCHED_JOIN
   async join(teamId: string, userId: string, code?: string): Promise<TeamMember> {
     return tx(d => {
       const team = d.teams.find(t => t.id === teamId);
       if (!team) throw new ApiError('Team not found', 404);
-      if (code && team.inviteCode.toUpperCase() !== code.toUpperCase()) throw new ApiError('Invalid invite', 403);
-      if (d.teamMembers.some(m => m.teamId === teamId && m.userId === userId)) throw new ApiError('Already a member');
+      if (code && team.inviteCode.toUpperCase() !== code.toUpperCase()) throw new ApiError('Invalid invite code', 403);
+
+      // Already member of THIS team?
+      const existing = d.teamMembers.find(m => m.teamId === teamId && m.userId === userId);
+      if (existing) {
+        if (existing.status === 'PENDING') throw new ApiError('Your join request is already pending approval');
+        if (existing.status === 'APPROVED') throw new ApiError('You are already a member of this team');
+        if (existing.status === 'REJECTED') throw new ApiError('Your previous request was rejected. Contact the captain.');
+      }
+
+      // Already member of ANOTHER team?
+      const otherTeam = d.teamMembers.find(m =>
+        m.userId === userId && m.status === 'APPROVED' && m.teamId !== teamId,
+      );
+      if (otherTeam) {
+        const other = d.teams.find(t => t.id === otherTeam.teamId);
+        throw new ApiError('You are already in team "' + (other?.name ?? 'Unknown') + '". Leave it first.');
+      }
+
+      // Pending request to ANOTHER team?
+      const otherPending = d.teamMembers.find(m =>
+        m.userId === userId && m.status === 'PENDING' && m.teamId !== teamId,
+      );
+      if (otherPending) {
+        const other = d.teams.find(t => t.id === otherPending.teamId);
+        throw new ApiError('You have a pending request to "' + (other?.name ?? 'Unknown') + '"');
+      }
+
       const m: TeamMember = {
         id: uid('tm'), teamId, userId, role: 'PLAYER',
         status: team.requiresApproval ? 'PENDING' : 'APPROVED',
         joinedAt: new Date().toISOString(),
       };
       d.teamMembers.push(m);
+
+      notify(team.captainId, 'INFO', 'New join request',
+        (d.users.find(u => u.id === userId)?.username ?? 'A player') + ' wants to join ' + team.name,
+        '/teams/' + team.id);
+
+      audit(userId, 'requested to join team', 'Team', team.id);
       return delay(m);
     });
   },
@@ -267,6 +310,66 @@ export const teamApi = {
     const m = d.teamMembers.find(x => x.userId === userId && x.status === 'APPROVED');
     return delay(m ? d.teams.find(t => t.id === m.teamId) : undefined);
   },
+
+  async removeMember(memberId: string, actorId: string): Promise<void> {
+    return tx(d => {
+      const member = d.teamMembers.find(m => m.id === memberId);
+      if (!member) throw new ApiError('Member not found', 404);
+      const team = d.teams.find(t => t.id === member.teamId);
+      if (!team) throw new ApiError('Team not found', 404);
+      if (team.captainId !== actorId) throw new ApiError('Only the captain can remove members', 403);
+      if (member.userId === team.captainId) throw new ApiError('Captain cannot remove themselves', 400);
+      d.teamMembers = d.teamMembers.filter(m => m.id !== memberId);
+      notify(member.userId, 'WARNING', 'Removed from team', 'You were removed from ' + team.name, '/teams/' + team.id);
+    });
+  },
+
+  async leaveTeam(userId: string): Promise<void> {
+    return tx(d => {
+      const member = d.teamMembers.find(m => m.userId === userId && m.status === 'APPROVED');
+      if (!member) throw new ApiError('You are not in a team', 404);
+      const team = d.teams.find(t => t.id === member.teamId);
+      if (!team) throw new ApiError('Team not found', 404);
+      if (team.captainId === userId) {
+        const others = d.teamMembers.filter(m => m.teamId === team.id && m.userId !== userId && m.status === 'APPROVED');
+        if (others.length > 0) throw new ApiError('Transfer captain role before leaving');
+        d.teamMembers = d.teamMembers.filter(m => m.teamId !== team.id);
+        d.teams = d.teams.filter(t => t.id !== team.id);
+        return;
+      }
+      d.teamMembers = d.teamMembers.filter(m => m.id !== member.id);
+      const leaving = d.users.find(u => u.id === userId);
+      notify(team.captainId, 'INFO', 'Player left team', (leaving?.username ?? 'A player') + ' left ' + team.name, '/teams/' + team.id);
+    });
+  },
+
+  async transferCaptain(teamId: string, newCaptainUserId: string, actorId: string): Promise<void> {
+    return tx(d => {
+      const team = d.teams.find(t => t.id === teamId);
+      if (!team) throw new ApiError('Team not found', 404);
+      if (team.captainId !== actorId) throw new ApiError('Only the captain can transfer', 403);
+      const newCap = d.teamMembers.find(m => m.teamId === teamId && m.userId === newCaptainUserId && m.status === 'APPROVED');
+      if (!newCap) throw new ApiError('New captain must be an approved member', 400);
+      const oldCap = d.teamMembers.find(m => m.teamId === teamId && m.userId === actorId);
+      if (oldCap) oldCap.role = 'PLAYER';
+      newCap.role = 'CAPTAIN';
+      team.captainId = newCaptainUserId;
+      notify(newCaptainUserId, 'SUCCESS', 'You are now team captain', team.name, '/teams/' + team.id);
+    });
+  },
+
+  async setMemberRole(memberId: string, role: TeamMember['role'], actorId: string): Promise<void> {
+    return tx(d => {
+      const member = d.teamMembers.find(m => m.id === memberId);
+      if (!member) throw new ApiError('Member not found', 404);
+      const team = d.teams.find(t => t.id === member.teamId);
+      if (!team) throw new ApiError('Team not found', 404);
+      if (team.captainId !== actorId) throw new ApiError('Only the captain can change roles', 403);
+      if (member.userId === team.captainId) throw new ApiError('Cannot change captain role', 400);
+      member.role = role;
+    });
+  },
+
 };
 
 /* Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў TOURNAMENTS Р В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ўР В Р вЂ Р Р†Р вЂљРЎС›Р РЋРІР‚в„ў */

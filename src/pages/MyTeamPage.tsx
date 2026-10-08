@@ -1,91 +1,397 @@
-import { Link } from 'react-router-dom';
-import { Copy, Swords, UserPlus } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import {
+  AlertCircle, Check, Copy, Crown, Hash, Search, Swords, UserPlus, X,
+} from 'lucide-react';
 import { PageHeader } from '@/components/common/page-header';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Field, Input } from '@/components/ui/input';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Avatar } from '@/components/ui/avatar';
+import { RequireAuth } from '@/components/common/require-auth';
+import { TeamMemberRow } from '@/components/team/team-member-row';
+import { InvitePanel } from '@/components/team/invite-panel';
+import { LeaveTeamButton } from '@/components/team/leave-team-button';
 import { useAuth } from '@/context/AuthContext';
+import { useToast } from '@/context/ToastContext';
 import { useAsync } from '@/hooks/useAsync';
 import { teamApi } from '@/services/api';
-import { useToast } from '@/context/ToastContext';
-import { RequireAuth } from '@/components/common/require-auth';
-import { Avatar } from '@/components/ui/avatar';
+import type { TeamMemberRole } from '@/types';
+
+const POLL_MS = 15000;
 
 export function MyTeamPage() {
-  return <RequireAuth><Inner/></RequireAuth>;
+  return <RequireAuth><Inner /></RequireAuth>;
 }
 
 function Inner() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const { data: team, loading } = useAsync(() => user ? teamApi.byUser(user.id) : Promise.resolve(undefined), [user?.id]);
-  const { data: members } = useAsync(() => team ? teamApi.members(team.id) : Promise.resolve([]), [team?.id]);
+  const navigate = useNavigate();
+  const { data: team, loading, refetch: refetchTeam } = useAsync(
+    () => user ? teamApi.byUser(user.id) : Promise.resolve(undefined),
+    [user?.id],
+  );
+  const { data: members, refetch: refetchMembers } = useAsync(
+    () => team ? teamApi.members(team.id) : Promise.resolve([]),
+    [team?.id],
+  );
+
+  // Auto-refresh pending every 15s
+  useEffect(() => {
+    if (!team) return;
+    const t = window.setInterval(() => { void refetchMembers(); }, POLL_MS);
+    return () => window.clearInterval(t);
+  }, [team, refetchMembers]);
+
+  useEffect(() => {
+    const onFocus = () => { void refetchMembers(); };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refetchMembers]);
 
   const copyInvite = () => {
     if (!team) return;
-    const link = window.location.origin + '/team/join/' + team.inviteCode;
-    void navigator.clipboard.writeText(link);
+    void navigator.clipboard.writeText(window.location.origin + '/team/join/' + team.inviteCode);
     toast('SUCCESS', 'Invite link copied');
+  };
+
+  const handleApprove = async (memberId: string) => {
+    try {
+      await teamApi.reviewMember(memberId, 'APPROVED');
+      toast('SUCCESS', 'Member approved');
+      void refetchTeam();
+      void refetchMembers();
+    } catch (e) {
+      toast('ERROR', 'Error', e instanceof Error ? e.message : 'Unknown');
+    }
+  };
+
+  const handleReject = async (memberId: string) => {
+    try {
+      await teamApi.reviewMember(memberId, 'REJECTED');
+      toast('WARNING', 'Request rejected');
+      void refetchMembers();
+    } catch (e) {
+      toast('ERROR', 'Error', e instanceof Error ? e.message : 'Unknown');
+    }
+  };
+
+  const handleRemove = async (memberId: string) => {
+    if (!user) return;
+    try {
+      await teamApi.removeMember(memberId, user.id);
+      toast('SUCCESS', 'Member removed');
+      void refetchTeam();
+      void refetchMembers();
+    } catch (e) {
+      toast('ERROR', 'Error', e instanceof Error ? e.message : 'Unknown');
+    }
+  };
+
+  const handleChangeRole = async (memberId: string, role: TeamMemberRole) => {
+    if (!user) return;
+    try {
+      await teamApi.setMemberRole(memberId, role, user.id);
+      toast('SUCCESS', 'Role updated');
+      void refetchMembers();
+    } catch (e) {
+      toast('ERROR', 'Error', e instanceof Error ? e.message : 'Unknown');
+    }
+  };
+
+  const handleTransfer = async (newCaptainUserId: string) => {
+    if (!user || !team) return;
+    try {
+      await teamApi.transferCaptain(team.id, newCaptainUserId, user.id);
+      toast('SUCCESS', 'Captain transferred');
+      void refetchTeam();
+      void refetchMembers();
+    } catch (e) {
+      toast('ERROR', 'Error', e instanceof Error ? e.message : 'Unknown');
+    }
   };
 
   if (loading) return <div className="p-12 text-center text-ink-faint">Loading...</div>;
 
-  if (!team) return <div>
-    <PageHeader title="My Team"/>
-    <EmptyState icon={Swords} title="You are not in a team yet"
-      description="Create your own squad or join using an invite link."
-      action={<Link to="/team/create"><Button><UserPlus size={14}/> Create team</Button></Link>}/>
-  </div>;
+  // ============================================================
+  // NOT IN A TEAM — Create + Join with code
+  // ============================================================
+  if (!team) {
+    return (
+      <div className="space-y-3 sm:space-y-4">
+        <PageHeader title="My Team" subtitle="Create your own squad or join an existing one" />
 
-  const captain = members?.find(m => m.role === 'CAPTAIN');
+        <div className="grid gap-3 sm:gap-4 lg:grid-cols-2">
+          {/* Create team */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Create a team</CardTitle>
+              <UserPlus size={14} className="text-brand-400" />
+            </CardHeader>
+            <CardBody className="space-y-4">
+              <p className="text-sm text-ink-muted">
+                Start your own squad. You become the captain and can invite players.
+              </p>
+              <Link to="/team/create">
+                <Button size="lg" className="w-full">
+                  <UserPlus size={16} /> Create team
+                </Button>
+              </Link>
+            </CardBody>
+          </Card>
 
-  return <div>
-    <PageHeader title="My Team" subtitle={team.name + ' - ' + team.tag}/>
-    <div className="grid gap-4 lg:grid-cols-3">
-      <Card className="lg:col-span-2">
-        <CardHeader><CardTitle>Roster</CardTitle></CardHeader>
-        <CardBody>
-          <ul className="space-y-2">
-            {members?.map(m => (
-              <li key={m.id} className="flex items-center gap-3 rounded-xl border border-line bg-bg-deep/40 p-3">
-                <Avatar src={m.user.avatar} name={m.user.fullName} size={40}/>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-white">{m.user.fullName}</p>
-                  <p className="text-xs text-ink-faint">@{m.user.username}</p>
-                </div>
-                <span className="rounded-full border border-brand-600/30 bg-brand-600/10 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-brand-400">
-                  {m.role}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </CardBody>
-      </Card>
-      <div className="space-y-4">
-        <Card>
-          <CardHeader><CardTitle>Invite link</CardTitle></CardHeader>
+          {/* Join with code */}
+          <JoinWithCodeCard />
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================
+  // IN A TEAM
+  // ============================================================
+  const approved = (members ?? []).filter(m => m.status === 'APPROVED');
+  const pending = (members ?? []).filter(m => m.status === 'PENDING');
+  const isCaptain = user?.id === team.captainId;
+  const hasOtherMembers = approved.filter(m => m.userId !== user?.id).length > 0;
+
+  return (
+    <div className="space-y-3 sm:space-y-4">
+      <PageHeader
+        title="My Team"
+        subtitle={team.name + ' - ' + team.tag}
+        action={
+          <Link to={'/teams/' + team.id}>
+            <Button size="sm" variant="secondary">View team page</Button>
+          </Link>
+        }
+      />
+
+      {/* Pending requests — captain only, on top */}
+      {isCaptain && pending.length > 0 && (
+        <Card className="border-warning/40 bg-warning/[.04] ring-2 ring-warning/20">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inset-0 animate-ping rounded-full bg-warning opacity-75" />
+                <span className="relative h-2 w-2 rounded-full bg-warning" />
+              </span>
+              <CardTitle className="text-warning">
+                Join Requests - {pending.length}
+              </CardTitle>
+            </div>
+            <AlertCircle size={16} className="text-warning" />
+          </CardHeader>
           <CardBody>
-            <p className="mb-2 break-all rounded-lg border border-line bg-bg-deep p-3 font-mono text-xs text-brand-400">
-              {window.location.origin}/team/join/{team.inviteCode}
-            </p>
-            <Button variant="secondary" size="sm" className="w-full" onClick={copyInvite}>
-              <Copy size={13}/> Copy link
-            </Button>
+            <ul className="space-y-3">
+              {pending.map(m => (
+                <li key={m.id} className="rounded-xl border border-warning/30 bg-bg-deep/60 p-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Avatar src={m.user.avatar} name={m.user.fullName} size={44} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold text-white">{m.user.fullName}</p>
+                      <p className="truncate text-xs text-ink-faint">
+                        @{m.user.username}
+                        {m.user.pubgNickname && <span> · {m.user.pubgNickname}</span>}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex gap-2">
+                    <Button size="lg" onClick={() => handleApprove(m.id)} className="flex-1">
+                      <Check size={15} /> Approve
+                    </Button>
+                    <Button
+                      size="lg"
+                      variant="secondary"
+                      onClick={() => handleReject(m.id)}
+                      className="flex-1 text-danger hover:bg-danger/10"
+                    >
+                      <X size={15} /> Reject
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
           </CardBody>
         </Card>
-        {captain && <Card>
-          <CardHeader><CardTitle>Captain</CardTitle></CardHeader>
-          <CardBody>
-            <div className="flex items-center gap-3">
-              <Avatar src={captain.user.avatar} name={captain.user.fullName} size={40}/>
-              <div>
-                <p className="text-sm font-semibold text-white">{captain.user.fullName}</p>
-                <p className="text-xs text-ink-faint">@{captain.user.username}</p>
-              </div>
-            </div>
-          </CardBody>
-        </Card>}
+      )}
+
+      {/* Team hero */}
+      <Card className="overflow-hidden">
+        <div className="relative">
+          {team.banner && <img src={team.banner} alt="" className="h-24 w-full object-cover sm:h-32" />}
+          {!team.banner && <div className="h-24 bg-gradient-to-br from-brand-600/30 to-transparent sm:h-32" />}
+          <div className="absolute inset-x-0 -bottom-10 flex justify-center sm:-bottom-12">
+            {team.logo && (
+              <img
+                src={team.logo}
+                alt=""
+                className="h-20 w-20 rounded-2xl border-4 border-bg-panel bg-bg-deep shadow-xl sm:h-24 sm:w-24 sm:rounded-3xl"
+              />
+            )}
+          </div>
+        </div>
+        <CardBody className="pt-14 text-center sm:pt-16">
+          <h2 className="font-display text-xl font-bold uppercase text-white sm:text-2xl">
+            {team.name}
+          </h2>
+          <p className="text-xs text-ink-faint sm:text-sm">
+            {team.tag}
+            {team.slogan && <span className="ml-2 italic">"{team.slogan}"</span>}
+          </p>
+        </CardBody>
+      </Card>
+
+      {/* Roster */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Roster - {approved.length} members</CardTitle>
+          <Crown size={14} className="text-amber-400" />
+        </CardHeader>
+        <CardBody>
+          {!approved.length ? (
+            <EmptyState icon={Swords} title="No approved members" />
+          ) : (
+            <ul className="space-y-2">
+              {approved.map(m => (
+                <TeamMemberRow
+                  key={m.id}
+                  member={m}
+                  isCaptain={!!isCaptain}
+                  isSelf={m.userId === user?.id}
+                  isTeamCaptain={m.userId === team.captainId}
+                  onRemove={() => handleRemove(m.id)}
+                  onChangeRole={(role) => handleChangeRole(m.id, role)}
+                  onTransfer={() => handleTransfer(m.userId)}
+                />
+              ))}
+            </ul>
+          )}
+        </CardBody>
+      </Card>
+
+      {isCaptain && (
+        <InvitePanel teamName={team.name} inviteCode={team.inviteCode} />
+      )}
+
+
+
+      <div className="flex justify-center pt-2">
+        <LeaveTeamButton
+          teamName={team.name}
+          isCaptain={!!isCaptain}
+          hasOtherMembers={hasOtherMembers}
+          onLeft={() => { void refetchTeam(); void refetchMembers(); }}
+        />
       </div>
     </div>
-  </div>;
+  );
+}
+
+// ============================================================
+// JoinWithCodeCard
+// ============================================================
+function JoinWithCodeCard() {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const navigate = useNavigate();
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) {
+      navigate('/login');
+      return;
+    }
+    const clean = code.trim().toUpperCase();
+    if (clean.length < 4) {
+      toast('WARNING', 'Invalid code', 'Codes are at least 4 characters');
+      return;
+    }
+    setBusy(true);
+    try {
+      const team = await teamApi.byInvite(clean);
+      if (!team) {
+        toast('ERROR', 'Team not found', 'Check the code with your captain');
+        setBusy(false);
+        return;
+      }
+      await teamApi.join(team.id, user.id, clean);
+      toast('SUCCESS', 'Request sent', 'Waiting for captain approval');
+      setCode('');
+      // Redirect after short delay so user sees toast
+      setTimeout(() => { window.location.reload(); }, 600);
+    } catch (err) {
+      toast('ERROR', 'Cannot join', err instanceof Error ? err.message : 'Unknown');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pasteFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      // Extract code from URL or paste directly
+      const match = text.match(/\/team\/join\/([A-Z0-9]+)/i);
+      setCode(match ? match[1].toUpperCase() : text.trim().toUpperCase());
+    } catch {
+      toast('WARNING', 'Cannot read clipboard');
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Join with code</CardTitle>
+        <Hash size={14} className="text-brand-400" />
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <p className="text-sm text-ink-muted">
+          Enter the invite code from your captain to join their team.
+        </p>
+
+        <form onSubmit={submit} className="space-y-3">
+          <Field label="Invite code" hint="Example: LFNQK42C">
+            <div className="relative">
+              <Input
+                value={code}
+                onChange={e => setCode(e.target.value.toUpperCase())}
+                placeholder="ABC12345"
+                maxLength={12}
+                className="pr-20 font-mono text-base uppercase tracking-wider"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                onClick={pasteFromClipboard}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg border border-line bg-white/[.04] px-2 py-1 text-[10px] font-semibold text-ink-muted transition hover:border-brand-600/40 hover:text-white"
+              >
+                Paste
+              </button>
+            </div>
+          </Field>
+
+          <Button
+            type="submit"
+            size="lg"
+            className="w-full"
+            loading={busy}
+            disabled={code.trim().length < 4}
+          >
+            <Search size={15} /> Find &amp; join team
+          </Button>
+        </form>
+
+        <p className="rounded-lg border border-line bg-bg-deep/40 p-2.5 text-[11px] leading-relaxed text-ink-faint">
+          <AlertCircle size={11} className="mr-1 inline text-brand-400" />
+          The captain will need to approve your request before you appear on the roster.
+        </p>
+      </CardBody>
+    </Card>
+  );
 }
