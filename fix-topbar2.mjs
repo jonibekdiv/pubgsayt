@@ -1,4 +1,6 @@
-import { Link, useNavigate } from 'react-router-dom';
+import fs from 'node:fs';
+
+const content = `import { Link, useNavigate } from 'react-router-dom';
 import { LogOut, Menu, Search, User, Wallet } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
@@ -130,3 +132,11 @@ export function Topbar({ onMenuClick }: TopbarProps) {
     </header>
   );
 }
+`;
+
+fs.writeFileSync('src/components/layout/topbar.tsx', content, 'utf-8');
+console.log('  [OK] src/components/layout/topbar.tsx qayta yozildi');
+console.log('');
+console.log('Endi serverni qayta ishga tushiring:');
+console.log('  Ctrl+C -> npm run dev');
+console.log('');
